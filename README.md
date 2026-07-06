@@ -38,9 +38,23 @@ Sorties :
 
 ## Journal des anomalies
 
-Chaque anomalie porte un code (ANO-0XX), une gravité (🔴 bloquant / 🟠 arbitrage /
-🟡 à vérifier / ℹ️ info / ✅ corrigé auto), une explication et une correction
-(automatique ou action à mener). Voir le catalogue dans `src/journal_audit.py`.
+Chaque anomalie porte un code, une gravité (🔴 bloquant / 🟠 arbitrage /
+🟡 à vérifier / ℹ️ info / ✅ corrigé auto), une explication, une correction
+(automatique ou action à mener) et, quand il existe, un lien vers le référentiel
+de codes de divergence (`code de divergence - ERR V2.3 (3).csv`, grammaire
+documentée dans `doc.md`).
+
+Toutes les anomalies réellement déclenchées par le pipeline sont désormais
+rattachées à un code du référentiel externe (`ERR-x-xxxxx-xxx` / `WRN-x-xxxxx-xxx`
+/ `ALT-x-xxxxx-xxx`), y compris les scénarios propres à ce pipeline pour lesquels
+le référentiel a été complété (sous-catégories internes `99001` fichier source,
+`99002` mapping colonnes, et nouveaux scénarios sur `99004` flag_annulation_G2SA,
+`99005` société vide, `99009` invariant jours=carence+IJSS, `60001` recouvrement
+résiduel). Seules restent en `ANO-0XX` les anomalies du catalogue jamais déclenchées
+par le pipeline actuel (dormantes, réservées à une évolution future).
+
+Voir le catalogue complet (code, gravité, explication, correction, lien) dans
+`src/journal_audit.py`.
 
 ## Rapport d'exécutions (cumulatif)
 

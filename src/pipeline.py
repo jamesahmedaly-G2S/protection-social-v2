@@ -28,11 +28,15 @@ def traiter_societe(SOCIETE_CIBLE, dsn_full, J=None):
     dsn["_emp"] = dsn.apply(cle_salarie, axis=1)
     NB_SAL = dsn["_emp"].nunique()
 
-    _n_avant = len(dsn)
+    n_djt_invalide = int(dsn["DJT"].isna().sum())
+    n_mois_invalide = int(dsn["mois_p"].isna().sum())
     dsn = dsn.dropna(subset=["DJT", "mois_p"]).copy()
-    if J is not None and len(dsn) < _n_avant:
-        J.tracer(ANO.DATE_INVALIDE, contexte=f"{_n_avant-len(dsn)} ligne(s) écartée(s)",
-                 correction_auto="AUTO — lignes sans DJT/mois exclues du calcul.")
+    if J is not None and n_djt_invalide:
+        J.tracer(ANO.DATE_INVALIDE_DJT, contexte=f"{n_djt_invalide} ligne(s) écartée(s)",
+                 correction_auto="AUTO — lignes sans DJT exploitable exclues du calcul.")
+    if J is not None and n_mois_invalide:
+        J.tracer(ANO.DATE_INVALIDE_MOIS, contexte=f"{n_mois_invalide} ligne(s) écartée(s)",
+                 correction_auto="AUTO — lignes sans mois d'absence exploitable exclues du calcul.")
 
     # ----------------------------------------------------------
     # (B1bis) RÉ-ATTRIBUTION DU MOTIF DES ANNULATIONS
