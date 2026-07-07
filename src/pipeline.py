@@ -180,18 +180,24 @@ def traiter_societe(SOCIETE_CIBLE, dsn_full, J=None):
         _djtk = episodes["_emp"].astype(str) + "||" + episodes["DJT"].astype(str)
         episodes["_meme_djt"] = _djtk.map(episodes.groupby(_djtk)["Motif arrêt"].nunique() > 1).fillna(False)
         episodes["_rang"] = episodes["Motif arrêt"].map(rang_motif)
+
+    # Mois de déclaration le plus récent par couple (salarié, motif, DJT)
+        _decl_max = dsn.groupby(["_emp", "Motif arrêt", "DJT"])["Decl"].max()
+        episodes["_decl"] = [_decl_max.get((e, m, d), pd.NaT)
+                             for e, m, d in zip(episodes["_emp"], episodes["Motif arrêt"], episodes["DJT"])]
+        
         for emp, grp in episodes.groupby("_emp"):
             # Tri : par début ; à début égal (même DJT), le motif PRIORITAIRE d'abord
             # (rang décroissant), puis le plus long — ainsi le motif prioritaire conserve
             # les jours en conflit (maternité/AT priment sur la maladie).
-            idx = grp.sort_values(["start", "_rang", "end"],
-                                  ascending=[True, False, False]).index.tolist()
+            idx = grp.sort_values(["start", "_decl", "_rang", "end"],
+                                  ascending=[True, False, False, False]).index.tolist()
             occupe_jusqua = pd.NaT
             motif_occupant = None; rang_occupant = None
             for i in idx:
                 s = episodes.at[i, "start_corr"]; e = episodes.at[i, "end_corr"]
                 motif = episodes.at[i, "Motif arrêt"]; mat_emp = episodes.at[i, "Matricule"]
-                rang_i = episodes.at[i, "_rang"]
+                rang_i = episodes.at[i, "_rang"]; decl_i = episodes.at[i, "_decl"]
                 forced = None
                 if is_maternite(motif) and str(mat_emp) in ARBITRAGE_MATERNITE:
                     forced = pd.Timestamp(ARBITRAGE_MATERNITE[str(mat_emp)])
