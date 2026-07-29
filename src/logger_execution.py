@@ -21,13 +21,15 @@ import logging
 import os
 
 
-def configurer_logger(log_dir, horodatage):
-    """Crée un logger fichier (execution_<horodatage>.log) + console (warnings/erreurs).
+def configurer_logger(log_dir, horodatage, prefix="execution", logger_name="execution_ijss"):
+    """Crée un logger fichier (<prefix>_<horodatage>.log) + console (warnings/erreurs).
+    `prefix`/`logger_name` permettent de distinguer plusieurs pipelines partageant le
+    même dossier de logs (ex. DSN vs PAIE) sans se marcher dessus.
     Renvoie (logger, chemin_fichier)."""
     os.makedirs(log_dir, exist_ok=True)
-    chemin = os.path.join(log_dir, f"execution_{horodatage}.log")
+    chemin = os.path.join(log_dir, f"{prefix}_{horodatage}.log")
 
-    logger = logging.getLogger("execution_ijss")
+    logger = logging.getLogger(logger_name)
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
 

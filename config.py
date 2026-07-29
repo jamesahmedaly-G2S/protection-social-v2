@@ -54,3 +54,42 @@ def rang_motif(motif):
 ARBITRAGE_MATERNITE = {
     # "matricule": "AAAA-MM-JJ",
 }
+
+# ===============================================================
+# PAIE — reconstruction IJSS "version paie" (étape 1 : structure uniquement)
+# ===============================================================
+# Source : data/input/PAIE_AUDIT.csv — grain rubrique (une ligne par rubrique de paie,
+# un salarié a plusieurs lignes par mois). Découpage en sortie sur la colonne "entreprise".
+PAIE_INPUT_FILE = "PAIE_AUDIT.csv"
+PAIE_SEP = ";"
+ANNEE_PAIE = 2026
+
+# Colonnes d'origine PAIE_AUDIT reprises telles quelles : (colonne source -> libellé de sortie),
+# dans l'ordre de sortie voulu.
+PAIE_COLONNES_ORIGINE = [
+    ("nir", "Nir"), ("matricule", "Matricule"), ("nom", "Nom"), ("prenom", "Prenom"),
+    ("entreprise", "Entreprise"), ("etablissement", "Etablissement"), ("siren", "Siren"),
+    ("nic", "Nic"), ("siret", "Siret"), ("code_entite", "code_entite"),
+    ("periode", "Periode"), ("date_sous_periode", "Date_sous_periode"),
+    ("num_sous_periode", "Num_sous_periode"), ("date_retro", "Date_retro"),
+    ("num_contrat", "Num_contrat"), ("num_bull", "num_bull"),
+    ("rubrique", "Rubrique"), ("libelle", "Libelle"), ("base", "Base"),
+    ("base_salariale", "Base_salariale"), ("taux_salarial", "Taux_salarial"),
+    ("montant_salarial", "Montant_salarial"), ("base_patronale", "Base_patronale"),
+    ("taux_patronal", "Taux_patronal"), ("montant_patronal", "Montant_patronal"),
+]
+
+# Colonnes de mapping PPU — ajoutées vides à cette étape ; seront remplies plus tard
+# via la jointure rubrique <-> Ppu Rubrique Code du référentiel PPU.
+PAIE_COLONNES_PPU = [
+    "Ppu Categorie1", "Ppu Categorie 2", "Ppu Sous Categorie",
+    "Ppu Affectation1", "Selection element PPU",
+]
+
+# Colonnes thématiques utiles à la reconstruction des IJSS — ajoutées vides à cette étape ;
+# seront affectées selon l'affectation PPU de la rubrique (étape suivante).
+PAIE_COLONNES_THEMATIQUES = [
+    "Salaire de référence", "IJSS (assiette Brut)", "IJSS (nettes)",
+    "IJSS subrogées", "Maintien", "Retenue pour absence",
+    "IJ prévoyance (assiette Brut)",
+]
