@@ -65,7 +65,8 @@ PAIE_SEP = ";"
 ANNEE_PAIE = 2026
 
 # Colonnes d'origine PAIE_AUDIT reprises telles quelles : (colonne source -> libellé de sortie),
-# dans l'ordre de sortie voulu.
+# dans l'ordre de sortie voulu. idclient/nom_prenom ajoutées en fin de bloc (pas de renommage,
+# comme code_entite/num_bull) : on ne les exclut plus de la sortie.
 PAIE_COLONNES_ORIGINE = [
     ("nir", "Nir"), ("matricule", "Matricule"), ("nom", "Nom"), ("prenom", "Prenom"),
     ("entreprise", "Entreprise"), ("etablissement", "Etablissement"), ("siren", "Siren"),
@@ -77,19 +78,105 @@ PAIE_COLONNES_ORIGINE = [
     ("base_salariale", "Base_salariale"), ("taux_salarial", "Taux_salarial"),
     ("montant_salarial", "Montant_salarial"), ("base_patronale", "Base_patronale"),
     ("taux_patronal", "Taux_patronal"), ("montant_patronal", "Montant_patronal"),
+    ("idclient", "idclient"), ("nom_prenom", "nom_prenom"),
 ]
 
-# Colonnes de mapping PPU — ajoutées vides à cette étape ; seront remplies plus tard
-# via la jointure rubrique <-> Ppu Rubrique Code du référentiel PPU.
-PAIE_COLONNES_PPU = [
-    "Ppu Categorie1", "Ppu Categorie 2", "Ppu Sous Categorie",
-    "Ppu Affectation1", "Selection element PPU",
-]
+# ===============================================================
+# PPU — référentiel de cartographie des rubriques (jointure avec PAIE_AUDIT)
+# ===============================================================
+# Source : data/input/Cartographie_ppu_v5_formules.xlsx, onglet "Cartographie".
+# Jointure sur clé composite (rubrique, libelle) <-> (Ppu Rubrique Code, Ppu Rubrique Libelle) :
+# le seul code de rubrique n'est pas unique dans le référentiel (ex. code 1300 réutilisé pour
+# des dizaines de libellés différents avec des classifications différentes) ; le couple
+# (code, libellé) l'est presque toujours (16 paires sur 618 restent ambiguës — on garde la
+# première occurrence rencontrée dans le référentiel pour celles-ci).
+# Toutes les colonnes du PPU sont conservées telles quelles (verbatim, ordre du fichier source) ;
+# elles ne sont plus listées en dur ici pour rester synchronisées avec le référentiel.
+PPU_INPUT_FILE = "Cartographie_ppu_v5_formules.xlsx"
+PPU_SHEET = "Cartographie"
+PPU_COL_CODE = "Ppu Rubrique Code"
+PPU_COL_LIBELLE = "Ppu Rubrique Libelle"
 
-# Colonnes thématiques utiles à la reconstruction des IJSS — ajoutées vides à cette étape ;
-# seront affectées selon l'affectation PPU de la rubrique (étape suivante).
-PAIE_COLONNES_THEMATIQUES = [
-    "Salaire de référence", "IJSS (assiette Brut)", "IJSS (nettes)",
-    "IJSS subrogées", "Maintien", "Retenue pour absence",
-    "IJ prévoyance (assiette Brut)",
-]
+# ===============================================================
+# COMPARAISON PAIE <-> DSN — populations de salariés par société
+# ===============================================================
+# Correspondance établie empiriquement par recoupement des matricules (zéros de tête
+# retirés côté DSN, cf. src/comparaison_populations.py) : {code société PAIE: société DSN}.
+MAPPING_PAIE_DSN = {
+    "52": "INLI",
+    "ARF": "AURA",
+    "GEF": "GRAND EST",
+    "SOG": "INLI PM",
+}
+COMPARATIF_XLSX = "Comparatif_populations_PAIE_DSN.xlsx"
+
+# ===============================================================
+# MOTIFS D'ABSENCE PAIE — rubriques identifiées comme pertinentes pour le calcul des
+# IJSS (absences prises en charge par la Sécurité Sociale), validées avec le métier.
+# ===============================================================
+# {motif: [(libellé, code rubrique), ...]} — liste et non dict, volontairement : un même
+# libellé peut légitimement porter plusieurs codes (ex. "Accident du Travail" -> 4400/
+# 4401/4420 selon le régime), et un même (rubrique, libellé) peut apparaître sous deux
+# motifs à la fois (ex. "Reg Paternité"/1300 sous maternité ET paternité) — un dict
+# écraserait ces doublons silencieusement. Clé d'identification côté PAIE_AUDIT :
+# (rubrique, libelle), pas le code seul (réutilisé entre motifs, ex. 1300).
+MOTIFS_PAIE = {
+    "maladie": [
+        ("CP- Absences Maladie", 745),
+        ("Régul Maladie", 1300),
+        ("Régul maladie", 1300),
+        ("Annulation Maladie", 3200),
+        ("Absence Maladie", 3300),
+        ("Abs. Acc.Travail/Maladie Prof.", 3350),
+        ("Absence Maladie Covid", 3380),
+        ("Maintien maladie Covid-19", 3385),
+        ("Maintien maladie Covid-19", 3386),
+        ("Annul. Maladie", 3480),
+        ("Maladie non maintenue", 3480),
+        ("CP - Abs AT/Maladie Pro.", 3680),
+        ("CP-Abs AT/Maladie Pro. NUL", 3680),
+        ("SS Maladie Apprenti", 4115),
+        ("SS Maladie/Maternité/Inv/Décès", 4115),
+        ("SS Maladie Non Resident", 4120),
+        ("SS Maladie Mandataire Soc.", 4125),
+        ("Complement Cotisation Maladie", 4670),
+        ("Annul. Complement Maladie", 4675),
+        ("Deduction Complement Maladie", 4675),
+        ("Regul.Annul.Complement Maladie", 4676),
+        ("Complement Maladie Mand.Social", 4680),
+        ("BS:SS Maladie RG", 6255),
+        ("BS:SS Maladie-Matern .- Invalid.", 6255),
+        ("SS Maladie-Mat .- Invalid .- Deces", 6255),
+        ("BS:SS Maladie PIM/ADM sur CIF", 6256),
+        ("BS:SS Maladie-Matern .- Invalid.", 6260),
+        ("Dont CP acquis sur maladie", 9415),
+        ("Nombre d'arrets Maladie-AT", 9750),
+    ],
+    "accident de travail": [
+        ("Annulation Accident travail", 3250),
+        ("Accident du Travail", 4400),
+        ("Accident du Travail RG", 4400),
+        ("Accident du Travail", 4401),
+        ("Accident du Travail PIM", 4401),
+        ("Accident du Travail", 4420),
+        ("Accident du Travail Apprenti", 4420),
+        ("** Accident du Travail **", 6349),
+        ("BS: Accident du Travail", 6350),
+    ],
+    "maternité": [
+        ("Reg Maternité", 1300),
+        ("Reg Paternité", 1300),
+        ("Absence Maternite", 3390),
+        ("Maintien Maternite", 3395),
+        ("Absence Paternite (Maintenue)", 3405),
+        ("Maintien Paternite", 3406),
+        ("Paternite (non maintenue)", 3415),
+        ("SS Maladie/Maternité/Inv/Décès", 4115),
+    ],
+    "paternité": [
+        ("Reg Paternité", 1300),
+        ("Absence Paternite (Maintenue)", 3405),
+        ("Maintien Paternite", 3406),
+        ("Paternité (non maintenue)", 3415),
+    ],
+}
