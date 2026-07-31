@@ -405,96 +405,59 @@ COLONNES_TRACABILITE = COLONNES_SORTIE + ["Total jours DSN (mois)", "Total jours
                                           "Écart total (mois)"]
 
 
-def construire_synthese_ok(mapping, jours_dsn_par_societe, jours_paie_par_code, detail_mensuel):
-    """Pour chaque société et chaque mois, sur la population des salariés COMMUNS aux
-    deux sources (matricule présent au moins une fois côté DSN ET au moins une fois côté
-    PAIE, sur toute la période), compte combien ont un total de jours d'absence identique
-    (DSN = PAIE, tous motifs confondus ce mois-là) et combien ont un écart. Même critère
-    "OK" que la colonne "Écart constaté" du détail mensuel (== 0), simplement agrégé au
-    niveau salarié/mois plutôt que salarié/mois/motif : c'est le total mensuel du salarié
-    qu'on doit comparer, pas motif par motif — un salarié sans aucune absence ce mois-là
-    des deux côtés (0 = 0) compte comme OK.
+def construire_synthese_ok(mapping, detail_mensuel):
+    """Synthèse OK/Pas OK par société et par mois, calculée DIRECTEMENT à partir du
+    détail mensuel (onglet "1 - Détail mensuel", le DataFrame produit par comparer_jours)
+    — pas de population reconstruite indépendamment (ex. tous les salariés "communs" aux
+    deux sources sur toute la période, complétée par des 0 = 0 pour les mois sans
+    absence). La population de référence pour un (société, mois) donné est exactement
+    celle qui a au moins une ligne dans le détail mensuel pour ce (société, mois) — un
+    salarié sans aucune ligne ce mois-là n'est pas compté. Les deux onglets restent ainsi
+    strictement cohérents (cf. échange du 2026-07-31 : "l'onglet synthèse OK devrait
+    partir du détail mensuel et refléter la réalité").
 
-    Les mois comparés sont limités à l'INTERSECTION des mois couverts par le DSN et par
-    la PAIE (pas l'union) : la source PAIE_AUDIT.csv s'arrête actuellement à juin 2026
-    alors que la DSN va jusqu'à septembre (cf. config.py) — sur juillet/août/septembre,
-    la PAIE n'a aucune ligne du tout, donc comparer produirait un 0 = 0 trivial pour tout
-    salarié sans arrêt DSN ce mois-là, ce qui gonflerait artificiellement le taux "OK"
-    sans rien valider (constaté : ~97-99% de faux "OK" sur ces mois avant correction,
-    cf. échange du 2026-07-31).
+    "OK" : le total mensuel du salarié (DSN vs PAIE, tous motifs confondus ce mois-là)
+    correspond exactement — même critère que la colonne "Écart constaté", simplement
+    agrégé au niveau salarié/mois plutôt que salarié/mois/motif (motifs hors périmètre
+    ici, cf. demande du 2026-07-31).
 
     Renvoie (synthese, tracabilite) :
-      - synthese : une ligne par (société, mois) — Salariés communs / OK / Pas OK / % OK,
-        pour le tableau de bord (un tableau par société une fois exporté) ;
+      - synthese : une ligne par (société, mois) — Salariés / OK / Pas OK / % OK, pour
+        le tableau de bord (un tableau par société une fois exporté) ;
       - tracabilite : le détail mensuel (grain motif), restreint aux (salarié, mois) où
         le total ne correspond pas, avec en plus le total DSN/PAIE/écart du mois pour ce
         salarié — pour permettre la vérification / correction / arbitrage au cas par cas.
     """
+    colonnes_synthese = ["Entreprise", "Société DSN", "Mois", "Salariés", "OK", "Pas OK", "% OK"]
+    if detail_mensuel.empty:
+        return (pd.DataFrame(columns=colonnes_synthese), pd.DataFrame(columns=COLONNES_TRACABILITE))
+
+    agg = (detail_mensuel.groupby(["Entreprise", "Matricule", "Mois absence (période)"], as_index=False)
+                        [["Nombre de jours absence PAIE", "Nombre de jours absence DSN"]].sum())
+    agg["Écart total (mois)"] = agg["Nombre de jours absence DSN"] - agg["Nombre de jours absence PAIE"]
+    agg["OK"] = agg["Écart total (mois)"].abs() < 1e-6
+
     lignes_synthese = []
-    blocs_tracabilite = []
+    for (entreprise, mois), groupe in agg.groupby(["Entreprise", "Mois absence (période)"]):
+        nb_ok = int(groupe["OK"].sum())
+        total = len(groupe)
+        lignes_synthese.append({
+            "Entreprise": entreprise, "Société DSN": mapping.get(entreprise, ""),
+            "Mois": mois, "Salariés": total, "OK": nb_ok, "Pas OK": total - nb_ok,
+            "% OK": (nb_ok / total) if total else 0.0,
+        })
+    synthese = pd.DataFrame(lignes_synthese, columns=colonnes_synthese).sort_values(
+        ["Entreprise", "Mois"]).reset_index(drop=True)
 
-    for code_paie, societe_dsn in mapping.items():
-        dsn_df = jours_dsn_par_societe.get(societe_dsn)
-        paie_df = jours_paie_par_code.get(code_paie)
-        dsn_mats = set(dsn_df["Matricule"]) if dsn_df is not None and not dsn_df.empty else set()
-        paie_mats = set(paie_df["Matricule"]) if paie_df is not None and not paie_df.empty else set()
-        communs = dsn_mats & paie_mats
-        if not communs:
-            continue
-
-        mois_dsn = set(dsn_df["Mois"]) if dsn_df is not None and not dsn_df.empty else set()
-        mois_paie = set(paie_df["Mois"]) if paie_df is not None and not paie_df.empty else set()
-        # Intersection, PAS union : sur un mois où la PAIE n'a aucune ligne du tout (ex.
-        # juillet-septembre 2026, hors périmètre actuel de PAIE_AUDIT.csv), comparer
-        # produirait un 0 = 0 trivial pour tout salarié sans arrêt DSN ce mois-là, ce qui
-        # gonflerait artificiellement le taux "OK" sans rien valider.
-        mois_pertinents = sorted(mois_dsn & mois_paie)
-        if not mois_pertinents:
-            continue
-
-        sous_detail = detail_mensuel.loc[detail_mensuel["Entreprise"] == code_paie]
-        agg = (sous_detail.groupby(["Matricule", "Mois absence (période)"], as_index=False)
-                          [["Nombre de jours absence PAIE", "Nombre de jours absence DSN"]].sum())
-
-        index_complet = pd.MultiIndex.from_product([sorted(communs), mois_pertinents],
-                                                    names=["Matricule", "Mois absence (période)"])
-        agg_complet = (agg.set_index(["Matricule", "Mois absence (période)"])
-                          .reindex(index_complet, fill_value=0.0)
-                          .reset_index())
-        agg_complet["Écart total (mois)"] = (agg_complet["Nombre de jours absence DSN"] -
-                                             agg_complet["Nombre de jours absence PAIE"])
-        agg_complet["OK"] = agg_complet["Écart total (mois)"].abs() < 1e-6
-
-        for mois, groupe in agg_complet.groupby("Mois absence (période)"):
-            nb_ok = int(groupe["OK"].sum())
-            total = len(groupe)
-            lignes_synthese.append({
-                "Entreprise": code_paie, "Société DSN": societe_dsn, "Mois": mois,
-                "Salariés communs": total, "OK": nb_ok, "Pas OK": total - nb_ok,
-                "% OK": (nb_ok / total) if total else 0.0,
-            })
-
-        pas_ok = agg_complet.loc[~agg_complet["OK"], ["Matricule", "Mois absence (période)",
-                                                       "Nombre de jours absence DSN",
-                                                       "Nombre de jours absence PAIE",
-                                                       "Écart total (mois)"]]
-        if not pas_ok.empty:
-            pas_ok = pas_ok.rename(columns={
-                "Nombre de jours absence DSN": "Total jours DSN (mois)",
-                "Nombre de jours absence PAIE": "Total jours PAIE (mois)",
-            })
-            fusion = pd.merge(sous_detail, pas_ok, on=["Matricule", "Mois absence (période)"], how="inner")
-            blocs_tracabilite.append(fusion)
-
-    synthese = pd.DataFrame(lignes_synthese)
-    if not synthese.empty:
-        synthese = synthese.sort_values(["Entreprise", "Mois"]).reset_index(drop=True)
-    else:
-        synthese = pd.DataFrame(columns=["Entreprise", "Société DSN", "Mois", "Salariés communs",
-                                         "OK", "Pas OK", "% OK"])
-
-    if blocs_tracabilite:
-        tracabilite = pd.concat(blocs_tracabilite, ignore_index=True)
+    pas_ok = agg.loc[~agg["OK"], ["Entreprise", "Matricule", "Mois absence (période)",
+                                  "Nombre de jours absence DSN", "Nombre de jours absence PAIE",
+                                  "Écart total (mois)"]].rename(columns={
+        "Nombre de jours absence DSN": "Total jours DSN (mois)",
+        "Nombre de jours absence PAIE": "Total jours PAIE (mois)",
+    })
+    if not pas_ok.empty:
+        tracabilite = pd.merge(detail_mensuel, pas_ok,
+                               on=["Entreprise", "Matricule", "Mois absence (période)"], how="inner")
         tracabilite = tracabilite[COLONNES_TRACABILITE].sort_values(
             ["Entreprise", "Matricule", "Mois absence (période)", "Motif"]).reset_index(drop=True)
     else:
@@ -545,11 +508,12 @@ def _ecrire_onglet_anomalies(writer, df, nom_onglet):
 
 def _ecrire_onglet_synthese(writer, synthese, nom_onglet):
     """Un tableau par société (empilés dans le même onglet, séparés par une ligne
-    vide) : Mois / Salariés communs / OK / Pas OK / % OK. Vert si tout le monde est
-    OK ce mois-là, rouge si personne ne l'est, orange sinon."""
+    vide) : Mois / Salariés / OK / Pas OK / % OK. "Salariés" = ceux qui apparaissent
+    dans le détail mensuel ce mois-là (cf. construire_synthese_ok). Vert si tout le
+    monde est OK ce mois-là, rouge si personne ne l'est, orange sinon."""
     wb = writer.book
     ws = wb.create_sheet(nom_onglet)
-    entetes = ["Mois", "Salariés communs", "OK", "Pas OK", "% OK"]
+    entetes = ["Mois", "Salariés", "OK", "Pas OK", "% OK"]
     r = 1
     if synthese.empty:
         for j, h in enumerate(entetes, start=1):
@@ -569,7 +533,7 @@ def _ecrire_onglet_synthese(writer, synthese, nom_onglet):
             r += 1
             for _, ligne in groupe.iterrows():
                 ws.cell(r, 1, ligne["Mois"])
-                ws.cell(r, 2, int(ligne["Salariés communs"]))
+                ws.cell(r, 2, int(ligne["Salariés"]))
                 ws.cell(r, 3, int(ligne["OK"]))
                 ws.cell(r, 4, int(ligne["Pas OK"]))
                 c = ws.cell(r, 5, round(float(ligne["% OK"]), 3))

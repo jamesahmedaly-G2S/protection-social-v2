@@ -34,10 +34,13 @@ Produit deux livrables distincts (+ un journal) :
           correction automatique (aucune info exploitable en source pour arbitrer ; ce
           contrôle reste sur le CSV source, car c'est justement un diagnostic de qualité
           de la donnée brute, en amont du reconstruit).
-        "4 - Synthèse OK par mois" : un tableau par société — pour chaque mois, combien de
-          salariés communs DSN/PAIE ont un total de jours d'absence identique (OK) et
-          combien ont un écart (Pas OK), avec le % OK (cf. réunion du 2026-07-31 : "pour
-          chaque société et chaque mois, combien de salariés sont OK / pas OK").
+        "4 - Synthèse OK par mois" : un tableau par société — calculée directement à
+          partir de "1 - Détail mensuel" (même DataFrame, pas de population reconstruite
+          à part) : pour chaque mois, parmi les salariés qui y apparaissent, combien ont
+          un total de jours d'absence identique (OK) et combien ont un écart (Pas OK),
+          avec le % OK (cf. réunion du 2026-07-31 : "pour chaque société et chaque mois,
+          combien de salariés sont OK / pas OK", et échange du 2026-07-31 : l'onglet doit
+          "partir du détail mensuel et refléter la réalité").
         "5 - Traçabilité écarts"   : détail mensuel (grain motif) restreint aux salariés
           "Pas OK" d'un mois donné, avec le total DSN/PAIE/écart du mois — pour permettre
           la vérification / correction / arbitrage salarié par salarié.
@@ -140,11 +143,13 @@ def main():
                   f"(écart {r['Écart constaté']:.1f})")
 
         # 6. Synthèse OK/Pas OK par société et par mois + traçabilité des écarts salarié/mois
-        etape(logger, 6, "Synthèse OK/Pas OK par société et par mois (population des salariés communs).")
-        synthese_ok, tracabilite_ecarts = construire_synthese_ok(mapping, jours_dsn, jours_paie, detail)
+        #    Calculée directement à partir de "detail" (le détail mensuel, onglet "1"), pour
+        #    rester strictement cohérente avec lui (cf. échange du 2026-07-31).
+        etape(logger, 6, "Synthèse OK/Pas OK par société et par mois (à partir du détail mensuel).")
+        synthese_ok, tracabilite_ecarts = construire_synthese_ok(mapping, detail)
         for _, r in synthese_ok.iterrows():
             logger.info(f"[{r['Entreprise']} / {r['Société DSN']}] {r['Mois']} : "
-                        f"{r['OK']}/{r['Salariés communs']} OK, {r['Pas OK']} écart(s) "
+                        f"{r['OK']}/{r['Salariés']} OK, {r['Pas OK']} écart(s) "
                         f"({r['% OK']:.1%} OK).")
         print(f"ℹ️  Synthèse OK/Pas OK : {len(tracabilite_ecarts[['Entreprise', 'Matricule', 'Mois absence (période)']].drop_duplicates())} "
               f"salarié(s)/mois en écart sur {len(synthese_ok)} ligne(s) société/mois.")
@@ -157,7 +162,7 @@ def main():
         logger_ecarts.info(f"SYNTHÈSE OK/PAS OK PAR SOCIÉTÉ ET PAR MOIS — run {horodatage}")
         for _, r in synthese_ok.iterrows():
             logger_ecarts.info(f"[{r['Entreprise']} / {r['Société DSN']}] {r['Mois']} : "
-                               f"{r['OK']}/{r['Salariés communs']} OK, {r['Pas OK']} écart(s) "
+                               f"{r['OK']}/{r['Salariés']} OK, {r['Pas OK']} écart(s) "
                                f"({r['% OK']:.1%} OK).")
         logger_ecarts.info("-" * 70)
         logger_ecarts.info("TRAÇABILITÉ DES SALARIÉS EN ÉCART (un par mois, pour vérification/correction/arbitrage)")
