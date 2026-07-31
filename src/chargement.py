@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Chargement CSV DSN, mapping colonnes, normalisation, détection annulations."""
 import pandas as pd
+import config
 from src.normalisation import get_source_juridique, _norm_soc, to_dt, to_num
 
 
@@ -62,8 +63,9 @@ def colonnes_manquantes(cols):
     return [lib[k] for k in REQUIS if cols.get(k) is None]
 
 
-def normaliser_et_detecter(df, c):
-    """Normalise les champs et pose l'indicateur d'annulation (union 3 signaux)."""
+def normaliser_et_detecter(df, c, date_debut=None, date_fin=None):
+    """Normalise les champs, filtre sur la période demandée et pose l'indicateur
+    d'annulation (union 3 signaux)."""
     col_nir=c["col_nir"]; col_matricule=c["col_matricule"]; col_nom_usage=c["col_nom_usage"]
     col_mois=c["col_mois"]; col_nom=c["col_nom"]; col_prenom=c["col_prenom"]; col_statut=c["col_statut"]
     col_temps=c["col_temps"]; col_motif=c["col_motif"]; col_djt=c["col_djt"]; col_fin=c["col_fin"]
@@ -88,7 +90,12 @@ def normaliser_et_detecter(df, c):
     df["Statut"]     = df[col_statut] if col_statut else ""
     df["Temps de travail"] = df[col_temps] if col_temps else ""
     df["Decl"]       = to_dt(df[col_decl]) if col_decl else pd.NaT
-    
+
+    date_debut = pd.Timestamp(date_debut) if date_debut is not None else config.PERIODE_FILTRE_DEBUT
+    date_fin = pd.Timestamp(date_fin) if date_fin is not None else config.PERIODE_FILTRE_FIN
+    mois_dates = df["mois_p"].dt.to_timestamp()
+    df = df.loc[(mois_dates >= date_debut) & (mois_dates <= date_fin)].copy()
+
     _flag = (df[col_annul].astype(str).str.strip().str.lower() == "true") if col_annul else False
     _motif_annul = df["Motif arrêt"] == "annulation"
     _jours_neg = df["Jours src"] < 0

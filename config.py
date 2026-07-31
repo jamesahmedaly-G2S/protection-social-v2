@@ -20,8 +20,13 @@ INPUT_FILE = "CLTINL0008_ABS-detailed-SS par mois calendaire_complete_2026 01 a 
 # 0. PARAMÈTRES
 # ===============================================================
 DATE_DEBUT_PERIODE = pd.Timestamp("2026-01-01")
-DATE_FIN_PERIODE   = pd.Timestamp("2026-03-31")
-SEUIL_PREVOYANCE   = 91
+DATE_FIN_PERIODE   = pd.Timestamp("2026-12-25")
+
+# Période de filtrage par défaut utilisée par les exécutions main*.py pour limiter
+# les traitements aux trois premiers mois de l'année. Peut être surchargée si besoin.
+PERIODE_FILTRE_DEBUT = DATE_DEBUT_PERIODE
+PERIODE_FILTRE_FIN   = DATE_FIN_PERIODE
+SEUIL_PREVOYANCE     = 91
 
 # Sociétés à traiter — un fichier de sortie par société. AURA en tête (cas POUYET/GANDOUZ).
 # Libellés normalisés (sans accent/apostrophe, majuscules). Mettre une seule entrée
@@ -122,62 +127,16 @@ COMPARATIF_XLSX = "Comparatif_populations_PAIE_DSN.xlsx"
 # (rubrique, libelle), pas le code seul (réutilisé entre motifs, ex. 1300).
 MOTIFS_PAIE = {
     "maladie": [
-        ("CP- Absences Maladie", 745),
-        ("Régul Maladie", 1300),
-        ("Régul maladie", 1300),
-        ("Annulation Maladie", 3200),
         ("Absence Maladie", 3300),
-        ("Abs. Acc.Travail/Maladie Prof.", 3350),
-        ("Absence Maladie Covid", 3380),
-        ("Maintien maladie Covid-19", 3385),
-        ("Maintien maladie Covid-19", 3386),
-        ("Annul. Maladie", 3480),
-        ("Maladie non maintenue", 3480),
-        ("CP - Abs AT/Maladie Pro.", 3680),
-        ("CP-Abs AT/Maladie Pro. NUL", 3680),
-        ("SS Maladie Apprenti", 4115),
-        ("SS Maladie/Maternité/Inv/Décès", 4115),
-        ("SS Maladie Non Resident", 4120),
-        ("SS Maladie Mandataire Soc.", 4125),
-        ("Complement Cotisation Maladie", 4670),
-        ("Annul. Complement Maladie", 4675),
-        ("Deduction Complement Maladie", 4675),
-        ("Regul.Annul.Complement Maladie", 4676),
-        ("Complement Maladie Mand.Social", 4680),
-        ("BS:SS Maladie RG", 6255),
-        ("BS:SS Maladie-Matern .- Invalid.", 6255),
-        ("SS Maladie-Mat .- Invalid .- Deces", 6255),
-        ("BS:SS Maladie PIM/ADM sur CIF", 6256),
-        ("BS:SS Maladie-Matern .- Invalid.", 6260),
-        ("Dont CP acquis sur maladie", 9415),
-        ("Nombre d'arrets Maladie-AT", 9750),
     ],
     "accident de travail": [
-        ("Annulation Accident travail", 3250),
-        ("Accident du Travail", 4400),
-        ("Accident du Travail RG", 4400),
-        ("Accident du Travail", 4401),
-        ("Accident du Travail PIM", 4401),
-        ("Accident du Travail", 4420),
-        ("Accident du Travail Apprenti", 4420),
-        ("** Accident du Travail **", 6349),
-        ("BS: Accident du Travail", 6350),
+        ("Abs. Acc.Travail/Maladie Prof", 3350),
     ],
     "maternité": [
-        ("Reg Maternité", 1300),
-        ("Reg Paternité", 1300),
         ("Absence Maternite", 3390),
-        ("Maintien Maternite", 3395),
-        ("Absence Paternite (Maintenue)", 3405),
-        ("Maintien Paternite", 3406),
-        ("Paternite (non maintenue)", 3415),
-        ("SS Maladie/Maternité/Inv/Décès", 4115),
     ],
     "paternité": [
-        ("Reg Paternité", 1300),
         ("Absence Paternite (Maintenue)", 3405),
-        ("Maintien Paternite", 3406),
-        ("Paternité (non maintenue)", 3415),
     ],
 }
 
@@ -207,14 +166,14 @@ MOTIFS_PAIE = {
 # "accident de travail" côté DSN pour la même absence, gonflant les deux écarts à la fois.
 MOTIFS_PAIE_JOURS = {
     "maladie": [
-        ("Annulation Maladie", 3200),
+        # ("Annulation Maladie", 3200),
         ("Absence Maladie", 3300),
-        ("Absence Maladie Covid", 3380),
-        ("Annul. Maladie", 3480),
-        ("Maladie non maintenue", 3480),
+        # ("Absence Maladie Covid", 3380),
+        # ("Annul. Maladie", 3480),
+        # ("Maladie non maintenue", 3480),
     ],
     "accident de travail": [
-        ("Annulation Accident travail", 3250),
+        # ("Annulation Accident travail", 3250),
         ("Abs. Acc.Travail/Maladie Prof.", 3350),
     ],
     "maternité": [
@@ -222,7 +181,7 @@ MOTIFS_PAIE_JOURS = {
     ],
     "paternité": [
         ("Absence Paternite (Maintenue)", 3405),
-        ("Paternite (non maintenue)", 3415),
-        ("Paternité (non maintenue)", 3415),
+        # ("Paternite (non maintenue)", 3415),
+        # ("Paternité (non maintenue)", 3415),
     ],
 }

@@ -7,6 +7,7 @@ pèse plusieurs centaines de Mo / plusieurs millions de lignes) pour rester lég
 en mémoire : seules les lignes de l'année demandée sont conservées à chaque bloc.
 """
 import pandas as pd
+import config
 from config import PAIE_COLONNES_ORIGINE, PPU_COL_CODE, PPU_COL_LIBELLE
 
 TAILLE_BLOC = 200_000
@@ -16,23 +17,32 @@ def _colonnes_source():
     return [src for src, _ in PAIE_COLONNES_ORIGINE]
 
 
-def lire_paie(path, annee, sep=";"):
+def lire_paie(path, annee, sep=";", date_debut=None, date_fin=None):
     """Lit PAIE_AUDIT.csv par blocs, ne garde que les lignes dont l'année de
-    la colonne "periode" correspond à `annee`. Renvoie un DataFrame (dtype=str,
-    colonnes source non renommées)."""
+    la colonne "periode" correspond à `annee` et dont la date est comprise dans
+    la fenêtre demandée (par défaut : premiers trois mois de la période métier)."""
     usecols = _colonnes_source()
     annee_str = str(annee)
+    date_debut = pd.Timestamp(date_debut) if date_debut is not None else config.PERIODE_FILTRE_DEBUT
+    date_fin = pd.Timestamp(date_fin) if date_fin is not None else config.PERIODE_FILTRE_FIN
     derniere_erreur = None
     for enc in ("utf-8-sig", "utf-8", "latin-1"):
         try:
+            entete = pd.read_csv(path, sep=sep, nrows=0, encoding=enc, dtype=str)
+            colonnes_dispo = [c for c in usecols if c in entete.columns]
             blocs = []
-            lecteur = pd.read_csv(path, sep=sep, dtype=str, usecols=usecols,
+            lecteur = pd.read_csv(path, sep=sep, dtype=str, usecols=colonnes_dispo or None,
                                   chunksize=TAILLE_BLOC, encoding=enc,
                                   keep_default_na=False, na_values=[])
             for bloc in lecteur:
-                retenu = bloc.loc[bloc["periode"].str[:4] == annee_str]
+                bloc = bloc.copy()
+                if "periode" not in bloc.columns:
+                    continue
+                bloc["_periode_dt"] = pd.to_datetime(bloc["periode"], errors="coerce")
+                retenu = bloc.loc[(bloc["periode"].str[:4] == annee_str) &
+                                  (bloc["_periode_dt"].between(date_debut, date_fin, inclusive="both"))]
                 if not retenu.empty:
-                    blocs.append(retenu)
+                    blocs.append(retenu.drop(columns=["_periode_dt"]))
             if not blocs:
                 return pd.DataFrame(columns=usecols)
             return pd.concat(blocs, ignore_index=True)
