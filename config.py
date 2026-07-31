@@ -169,8 +169,8 @@ MOTIFS_PAIE_JOURS = {
         # ("Annulation Maladie", 3200),
         ("Absence Maladie", 3300),
         # ("Absence Maladie Covid", 3380),
-        # ("Annul. Maladie", 3480),
-        # ("Maladie non maintenue", 3480),
+        ("Annul. Maladie", 3480),
+        ("Maladie non maintenue", 3480),
     ],
     "accident de travail": [
         # ("Annulation Accident travail", 3250),
