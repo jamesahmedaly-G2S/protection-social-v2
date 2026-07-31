@@ -84,11 +84,27 @@ def decouper_par_entreprise(df):
 def construire_reconstruit(df, colonnes_ppu):
     """Construit le DataFrame de sortie : colonnes d'origine PAIE_AUDIT renommées
     (telles quelles) + toutes les colonnes du PPU, verbatim, dans l'ordre du
-    référentiel. Une rubrique sans correspondance PPU (jointure "left") donne des
-    colonnes PPU vides plutôt que NaN."""
+    référentiel, + "Motif" et "Jours d'absence (retenu)".
+
+    Ces 2 dernières colonnes réutilisent exactement la même logique validée que le
+    comparatif PAIE <-> DSN (config.MOTIFS_PAIE_JOURS, cf. src/comparaison_absences.py) :
+    le reconstruit doit être la version la plus fidèle possible (c'est lui qui sert de
+    base à une éventuelle récupération auprès de la Sécurité sociale), donc il porte
+    lui-même ce qu'on a validé, plutôt que de laisser cette info vivre uniquement dans
+    un module de comparaison séparé. Une rubrique sans correspondance PPU (jointure
+    "left") donne des colonnes PPU vides plutôt que NaN ; une rubrique qui n'est pas
+    identifiée comme un jour d'absence a "Motif" et "Jours d'absence (retenu)" vides."""
     sortie = pd.DataFrame(index=df.index)
     for src, dst in PAIE_COLONNES_ORIGINE:
         sortie[dst] = df[src].values
     for col in colonnes_ppu:
         sortie[col] = df[col].values if col in df.columns else ""
+
+    from src.comparaison_absences import identifier_motifs
+    from src.normalisation import to_num
+    df_motifs = identifier_motifs(df)
+    a_un_motif = df_motifs["_motifs"].apply(len) > 0
+    sortie["Motif"] = df_motifs["_motifs"].apply(lambda s: ", ".join(sorted(s)) if s else "").values
+    sortie["Jours d'absence (retenu)"] = to_num(df["base"]).where(a_un_motif, "").values
+
     return sortie.fillna("")

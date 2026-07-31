@@ -8,9 +8,16 @@ ceux du DSN, à quatre niveaux :
      lancé main.py (DSN) et main_paie.py (PAIE) au préalable ;
   2. sources         : fichiers sources bruts (CSV DSN, PAIE_AUDIT.csv), année complète —
      vérifie que les pipelines de reconstruction ne perdent aucun salarié en route ;
-  3. T1 reconstr.    : DSN reconstruit vs PAIE restreinte au 1er trimestre 2026 (même
-     fenêtre temporelle que le DSN, qui ne couvre que Q1) ;
-  4. T1 sources      : DSN source brute vs PAIE restreinte au 1er trimestre 2026.
+  3. période reconstr. : DSN reconstruit vs PAIE (source) restreinte à la période
+     DATE_DEBUT_PERIODE/DATE_FIN_PERIODE (cf. config.py — même fenêtre que le DSN) ;
+  4. période sources   : DSN source brute vs PAIE (source) restreinte à la même période.
+
+DATE_DEBUT_PERIODE/DATE_FIN_PERIODE couvre actuellement l'année 2026 complète (était :
+T1 seul) — les niveaux 1/3 et 2/4 sont alors quasi équivalents, le reconstruit PAIE et la
+source PAIE couvrant désormais la même fenêtre. Le fichier source DSN contient réellement
+des déclarations jusqu'en septembre 2026 (pas seulement Q1, malgré son nom de fichier),
+donc le DSN profite lui aussi de l'extension de période, dans la limite de ce que couvre
+sa source actuelle (jusqu'à septembre).
 
 Produit :
   - output/rapports/Comparatif_populations_PAIE_DSN.xlsx (8 onglets, 2 par niveau :
@@ -97,29 +104,30 @@ def main():
         synth_src, detail_src = comparer(mapping, dsn_source_pop, paie_source_pop)
         _log_synthese(logger, "Sources", synth_src)
 
-        # 3. Comparaison à isopérimètre T1 (PAIE restreinte à Q1 2026, comme le DSN)
-        etape(logger, 5, f"Population PAIE restreinte au T1 ({config.DATE_DEBUT_PERIODE.date()} "
+        # 3. Comparaison à isopérimètre (PAIE source restreinte à la période DSN)
+        etape(logger, 5, f"Population PAIE restreinte à la période ({config.DATE_DEBUT_PERIODE.date()} "
                          f"-> {config.DATE_FIN_PERIODE.date()}).")
-        paie_t1_pop = lire_population_paie_source(chemin_paie_source, annee=config.ANNEE_PAIE,
-                                                   sep=config.PAIE_SEP,
-                                                   date_debut=config.DATE_DEBUT_PERIODE,
-                                                   date_fin=config.DATE_FIN_PERIODE)
+        paie_periode_pop = lire_population_paie_source(chemin_paie_source, annee=config.ANNEE_PAIE,
+                                                        sep=config.PAIE_SEP,
+                                                        date_debut=config.DATE_DEBUT_PERIODE,
+                                                        date_fin=config.DATE_FIN_PERIODE)
 
-        etape(logger, 6, "Comparaison T1 : DSN reconstruit vs PAIE T1.")
-        synth_t1_reco, detail_t1_reco = comparer(mapping, dsn_reco_pop, paie_t1_pop)
-        _log_synthese(logger, "T1/Reconstruits", synth_t1_reco)
+        etape(logger, 6, "Comparaison période : DSN reconstruit vs PAIE (source, période restreinte).")
+        synth_periode_reco, detail_periode_reco = comparer(mapping, dsn_reco_pop, paie_periode_pop)
+        _log_synthese(logger, "Période/Reconstruits", synth_periode_reco)
 
-        etape(logger, 7, "Comparaison T1 : DSN source vs PAIE T1.")
-        synth_t1_src, detail_t1_src = comparer(mapping, dsn_source_pop, paie_t1_pop)
-        _log_synthese(logger, "T1/Sources", synth_t1_src)
+        etape(logger, 7, "Comparaison période : DSN source vs PAIE (source, période restreinte).")
+        synth_periode_src, detail_periode_src = comparer(mapping, dsn_source_pop, paie_periode_pop)
+        _log_synthese(logger, "Période/Sources", synth_periode_src)
 
         # 4. Écriture du classeur
         etape(logger, 8, "Écriture du classeur de comparaison.")
         fichier = ecrire_comparatif([
             ("reconstruits", synth_reco, detail_reco),
             ("sources", synth_src, detail_src),
-            ("T1 reconstr.", synth_t1_reco, detail_t1_reco),
-            ("T1 sources", synth_t1_src, detail_t1_src),
+            # Noms courts : limite Excel de 31 caractères par nom d'onglet (cf. "n - Comparatif (titre)").
+            ("pér. reconstr.", synth_periode_reco, detail_periode_reco),
+            ("pér. sources", synth_periode_src, detail_periode_src),
         ])
         logger.info(f"Classeur écrit : {fichier}")
 

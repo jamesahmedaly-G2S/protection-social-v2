@@ -3,26 +3,42 @@
 main_absences.py — Comparaison des jours d'absence PAIE <-> DSN
 =============================================================================
 Compare, par société / salarié / mois / motif d'arrêt, le nombre de jours d'absence
-reconstruit côté DSN (classeurs output/xlsx/, déjà reconstruits par main.py) et côté
-PAIE (calculé depuis PAIE_AUDIT.csv, via les rubriques validées comme portant un vrai
-nombre de jours — cf. config.MOTIFS_PAIE_JOURS). Toute la logique est dans un seul
-fichier : src/comparaison_absences.py.
+côté DSN et côté PAIE — les deux lus depuis les classeurs déjà RECONSTRUITS
+(output/xlsx/, produits par main.py et main_paie.py), jamais recalculés depuis les
+fichiers source. Les reconstruits sont le livrable final : ils sont censés avoir déjà
+corrigé les anomalies identifiées, donc toute analyse en aval doit en partir plutôt que
+de recalculer indépendamment depuis la donnée brute (cf. échanges du 2026-07-31).
 
-Le détail mensuel est volontairement restreint à janvier/février/mars 2026 : le DSN ne
-couvre que le 1er trimestre, comparer des mois où le DSN n'a structurellement aucune
-donnée n'apporterait qu'un faux écart (PAIE non nul vs DSN toujours à 0).
+Les deux reconstruits sont désormais restreints à la même période — cf.
+config.DATE_DEBUT_PERIODE/DATE_FIN_PERIODE, appliqué à la fois par main.py et par
+main_paie.py, actuellement l'année 2026 complète (était : T1 seul) : pas de filtrage de
+mois à refaire ici, les données lues sont déjà sur le bon périmètre. Le fichier source DSN
+contient réellement des déclarations jusqu'en septembre 2026 (pas seulement Q1, malgré son
+nom de fichier) : l'extension à l'année complète a donc un effet réel des deux côtés.
 
-Produit :
-  - output/rapports/Comparatif_jours_absence_PAIE_DSN.xlsx :
-      "1 - Détail mensuel"            : une ligne par salarié / mois / motif, janvier à mars 2026 ;
-      "2 - Total T1"                   : une ligne par salarié / motif, sommée sur le 1er trimestre ;
-      "3 - Anomalies (jours)"          : lignes PAIE_AUDIT où "Base" est physiquement
-        incohérente pour un mois (> 31 jours, ou négative hors annulation) — signalement,
-        pas une correction automatique (aucune info exploitable en source pour arbitrer).
-    Colonnes : Clé salarié (pivot), Nom, Prénom, Nom d'usage, NIR, Matricule, Entreprise,
-    Etablissement, Siren, Nic, Siret, Motif, Nombre de jours absence PAIE/DSN, Mois
-    absence (période), Écart constaté — avec filtre Excel cliquable sur chaque colonne.
-    Siren/Nic/Siret proviennent de la source DSN (toujours à 0 dans PAIE_AUDIT.csv).
+Produit deux livrables distincts (+ un journal) :
+
+  - LIVRABLE "jours d'absence côté paye" (réunion Solange du 2026-07-31, point 1 des 3
+    livrables demandés — miroir du fichier DSN déjà produit par main.py) :
+      output/xlsx/Jours_Absence_PAIE_<code>.xlsx, un par société. Une ligne par
+      salarié/mois/motif, lu depuis Reconstruit_PAIE_<code>.xlsx (donc la période
+      DATE_DEBUT_PERIODE/DATE_FIN_PERIODE en vigueur).
+
+  - COMPARATIF "jours d'absence PAIE <-> DSN" (livrable 3 de la même réunion —
+    rapprochement DSN/paye via le pivot salarié) :
+      output/rapports/Comparatif_jours_absence_PAIE_DSN.xlsx :
+        "1 - Détail mensuel"    : une ligne par salarié / mois / motif ;
+        "2 - Total Année 2026"  : une ligne par salarié / motif, sommée sur l'année 2026 ;
+        "3 - Anomalies (jours)" : lignes PAIE_AUDIT où "Base" est physiquement incohérente
+          pour un mois (> 31 jours, ou négative hors annulation) — signalement, pas une
+          correction automatique (aucune info exploitable en source pour arbitrer ; ce
+          contrôle reste sur le CSV source, car c'est justement un diagnostic de qualité
+          de la donnée brute, en amont du reconstruit).
+      Colonnes : Clé salarié (pivot), Nom, Prénom, Nom d'usage, NIR, Matricule, Entreprise,
+      Etablissement, Siren, Nic, Siret, Motif, Nombre de jours absence PAIE/DSN, Mois
+      absence (période), Écart constaté — avec filtre Excel cliquable sur chaque colonne.
+      Siren/Nic/Siret sont recoupés avec la source DSN (toujours à 0 dans PAIE_AUDIT.csv).
+
   - output/logs/execution/execution_absences_<ts>.log : déroulé + erreurs.
 
 Lancement :
@@ -33,9 +49,11 @@ from datetime import datetime
 
 import config
 from src.logger_execution import configurer_logger, etape
-from src.comparaison_absences import (nom_fichier_dsn, charger_jours_dsn, charger_jours_paie,
-                                      lire_identite_dsn_source, comparer_jours, comparer_jours_periode,
-                                      detecter_anomalies_jours, ecrire_comparatif_absences)
+from src.comparaison_absences import (nom_fichier_dsn, nom_fichier_paie, charger_jours_dsn,
+                                      charger_jours_paie, lire_identite_dsn_source, comparer_jours,
+                                      comparer_jours_periode, detecter_anomalies_jours,
+                                      ecrire_comparatif_absences, construire_absences_paie,
+                                      ecrire_absences_paie)
 
 
 def resoudre(nom_fichier):
@@ -58,29 +76,29 @@ def main():
 
     mapping = config.MAPPING_PAIE_DSN
     try:
-        # 1. Vérification des classeurs DSN reconstruits
-        etape(logger, 1, "Vérification des classeurs DSN reconstruits.")
-        manquants = [os.path.join(config.OUTPUT_DIR, nom_fichier_dsn(soc))
-                    for soc in mapping.values()
-                    if not os.path.exists(os.path.join(config.OUTPUT_DIR, nom_fichier_dsn(soc)))]
+        # 1. Vérification des classeurs reconstruits (DSN + PAIE) — on part d'eux, pas des sources
+        etape(logger, 1, "Vérification des classeurs reconstruits (DSN + PAIE).")
+        manquants = []
+        for code_paie, societe_dsn in mapping.items():
+            for chemin in (os.path.join(config.OUTPUT_DIR, nom_fichier_dsn(societe_dsn)),
+                          os.path.join(config.OUTPUT_DIR, nom_fichier_paie(code_paie))):
+                if not os.path.exists(chemin):
+                    manquants.append(chemin)
         if manquants:
-            logger.error(f"Classeurs DSN manquants : {manquants}")
-            raise FileNotFoundError(f"Classeurs DSN reconstruits manquants (lancer main.py "
-                                    f"au préalable) : {manquants}")
+            logger.error(f"Classeurs manquants : {manquants}")
+            raise FileNotFoundError(
+                "Classeurs reconstruits manquants (lancer main.py et main_paie.py "
+                f"au préalable) : {manquants}")
 
-        # 2. Chargement des jours DSN
+        # 2. Chargement des jours DSN (depuis les reconstruits)
         etape(logger, 2, "Chargement des jours d'absence DSN (classeurs reconstruits).")
         jours_dsn = charger_jours_dsn(mapping)
         for soc, df in jours_dsn.items():
             logger.info(f"— DSN {soc} : {len(df)} ligne(s) (matricule/mois/motif).")
 
-        # 3. Chargement des jours PAIE
-        chemin_paie_source = resoudre(config.PAIE_INPUT_FILE)
-        etape(logger, 3, f"Chargement des jours d'absence PAIE depuis {chemin_paie_source}.")
-        if not os.path.exists(chemin_paie_source):
-            logger.error(f"Source PAIE introuvable : {chemin_paie_source}")
-            raise FileNotFoundError(f"Source PAIE introuvable : {chemin_paie_source}")
-        jours_paie = charger_jours_paie(chemin_paie_source, annee=config.ANNEE_PAIE, sep=config.PAIE_SEP)
+        # 3. Chargement des jours PAIE (depuis les reconstruits, pas depuis PAIE_AUDIT.csv)
+        etape(logger, 3, "Chargement des jours d'absence PAIE (classeurs Reconstruit_PAIE_<code>.xlsx).")
+        jours_paie = charger_jours_paie(mapping)
         for code, df in jours_paie.items():
             logger.info(f"— PAIE {code} : {len(df)} ligne(s) (matricule/mois/motif).")
 
@@ -90,14 +108,14 @@ def main():
         identite_dsn = lire_identite_dsn_source(chemin_dsn_source) if os.path.exists(chemin_dsn_source) else {}
         logger.info(f"Identité DSN chargée pour {len(identite_dsn)} matricule(s).")
 
-        # 5. Comparaison — détail mensuel (janvier-mars, cohérent avec le périmètre DSN) et total T1
+        # 5. Comparaison (les deux côtés sont déjà sur le même périmètre, cf. docstring)
         etape(logger, 5, "Comparaison DSN <-> PAIE (jointure matricule/mois/motif).")
-        mois_t1 = [f"{config.ANNEE_PAIE}-01", f"{config.ANNEE_PAIE}-02", f"{config.ANNEE_PAIE}-03"]
-        detail_complet = comparer_jours(mapping, jours_dsn, jours_paie, identite_dsn=identite_dsn)
-        detail = detail_complet.loc[detail_complet["Mois absence (période)"].isin(mois_t1)].copy()
-        detail_t1 = comparer_jours_periode(detail, mois_t1, libelle_periode="T1 2026")
+        detail = comparer_jours(mapping, jours_dsn, jours_paie, identite_dsn=identite_dsn)
+        mois_annee = [f"{config.ANNEE_PAIE}-{m:02d}" for m in range(1, 13)]
+        libelle_annee = f"Année {config.ANNEE_PAIE}"
+        detail_annee = comparer_jours_periode(detail, mois_annee, libelle_periode=libelle_annee)
 
-        synthese = (detail_t1.groupby(["Entreprise", "Motif"], as_index=False)
+        synthese = (detail_annee.groupby(["Entreprise", "Motif"], as_index=False)
                              [["Nombre de jours absence DSN", "Nombre de jours absence PAIE",
                                "Écart constaté"]].sum())
         for _, r in synthese.iterrows():
@@ -110,19 +128,30 @@ def main():
                   f"PAIE={r['Nombre de jours absence PAIE']:.1f} j "
                   f"(écart {r['Écart constaté']:.1f})")
 
-        # 6. Détection des anomalies (jours incohérents pour un mois)
+        # 6. Détection des anomalies (diagnostic sur le CSV source, en amont du reconstruit)
         etape(logger, 6, "Détection des anomalies (Base > 31j ou négative hors annulation).")
+        chemin_paie_source = resoudre(config.PAIE_INPUT_FILE)
         anomalies = detecter_anomalies_jours(chemin_paie_source, annee=config.ANNEE_PAIE, sep=config.PAIE_SEP)
         logger.info(f"{len(anomalies)} anomalie(s) détectée(s).")
         print(f"⚠️  {len(anomalies)} ligne(s) anormale(s) (jours incohérents pour un mois).")
 
-        # 7. Écriture
-        etape(logger, 7, "Écriture du classeur de comparaison.")
-        fichier = ecrire_comparatif_absences(detail, detail_t1, anomalies, libelle_periode="T1 2026")
-        logger.info(f"Classeur écrit : {fichier}")
+        # 7. LIVRABLE "jours d'absence côté paye" (miroir autonome du fichier DSN)
+        etape(logger, 7, "Écriture du LIVRABLE jours d'absence PAIE (Jours_Absence_PAIE_<code>.xlsx).")
+        absences_paie = construire_absences_paie(jours_paie, identite_dsn=identite_dsn)
+        fichiers_absences = ecrire_absences_paie(absences_paie)
+        for f in fichiers_absences:
+            logger.info(f"Livrable jours d'absence PAIE écrit : {f}")
+
+        # 8. COMPARATIF "jours d'absence PAIE <-> DSN"
+        etape(logger, 8, "Écriture du COMPARATIF PAIE <-> DSN (Comparatif_jours_absence_PAIE_DSN.xlsx).")
+        fichier = ecrire_comparatif_absences(detail, detail_annee, anomalies, libelle_periode=libelle_annee)
+        logger.info(f"Comparatif écrit : {fichier}")
 
         logger.info(f"FIN D'EXÉCUTION COMPARATIF ABSENCES — run {horodatage} — statut : SUCCÈS")
-        print(f"\n✅ Terminé. Classeur : {fichier}")
+        print(f"\n✅ LIVRABLE jours d'absence PAIE — {len(fichiers_absences)} fichier(s) :")
+        for f in fichiers_absences:
+            print(f"   • {f}")
+        print(f"✅ COMPARATIF PAIE <-> DSN : {fichier}")
         print(f"Journal d'exécution : {chemin_exec}")
 
     except Exception as exc:

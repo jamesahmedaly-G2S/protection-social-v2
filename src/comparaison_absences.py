@@ -6,18 +6,22 @@ extraction DSN, jointure, export) : à consulter de haut en bas, section par sec
 
   1. IDENTIFICATION DES RUBRIQUES PAIE — quelles rubriques comptent comme un motif
      d'absence, et lecture de la colonne "Base" (qui n'est un nombre de jours que pour
-     certaines rubriques, cf. config.MOTIFS_PAIE_JOURS).
-  2. EXTRACTION DSN — lecture des classeurs déjà reconstruits (output/xlsx/), qui
-     portent déjà "Jours absence (mois)" par motif : pas de recalcul, seulement une
-     lecture + un regroupement de motifs pour pouvoir comparer avec la PAIE.
+     certaines rubriques, cf. config.MOTIFS_PAIE_JOURS). Sert à construire_reconstruit()
+     (src/chargement_paie.py) — pas à ce module directement (cf. point 2).
+  2. EXTRACTION PAIE ET DSN — lecture des classeurs déjà reconstruits (output/xlsx/,
+     produits par main_paie.py et main.py), PAS du CSV source : les reconstruits sont
+     le livrable final, censés avoir déjà corrigé les anomalies identifiées — toute
+     analyse en aval doit en partir, pas recalculer indépendamment depuis la donnée
+     brute (cf. échanges du 2026-07-31). Reconstruit_PAIE_<code>.xlsx porte déjà
+     "Motif"/"Jours d'absence (retenu)" (calculés par construire_reconstruit avec la
+     même logique que la section 1) ; Reconstruit_<société>_CORRIGE.xlsx porte déjà
+     "Jours absence (mois)" par motif.
   3. COMPARAISON — jointure PAIE <-> DSN sur (matricule normalisé, mois, motif).
   4. EXPORT — classeur Excel avec les colonnes d'identité demandées, une clé pivot par
      salarié, et un filtre Excel cliquable sur chaque colonne (dont l'écart).
 
-Le calcul PAIE part directement du CSV source (via lire_paie(), déjà utilisé pour la
-comparaison de populations) plutôt que des classeurs reconstruits : construire_reconstruit()
-ne fait qu'un renommage/passage de colonnes, le résultat est donc rigoureusement identique
-mais bien plus rapide à obtenir (le classeur "52" à lui seul prend plusieurs minutes à relire).
+Les deux reconstruits (PAIE et DSN) sont désormais restreints au 1er trimestre 2026 —
+même périmètre des deux côtés, donc plus besoin de filtrer les mois nous-mêmes ici.
 """
 import os
 import re
@@ -95,9 +99,12 @@ def _construire_lookup_motifs(mapping=MOTIFS_PAIE_JOURS):
     return lookup
 
 
-def _identifier_motifs(df):
+def identifier_motifs(df):
     """Ajoute une colonne "_motifs" (set des motifs reconnus, vide si aucune
-    correspondance) au DataFrame PAIE (colonnes source : rubrique, libelle)."""
+    correspondance) au DataFrame PAIE (colonnes source : rubrique, libelle).
+    Fonction publique : réutilisée par src/chargement_paie.py (construire_reconstruit)
+    pour que Reconstruit_PAIE_<code>.xlsx porte lui-même le motif/jours d'absence
+    retenu, plutôt que de laisser cette info exister seulement dans ce module."""
     lookup = _construire_lookup_motifs()
     libelles_norm = df["libelle"].apply(_normaliser_libelle)
     cles = list(zip(df["rubrique"].astype(str).str.strip(), libelles_norm))
@@ -106,35 +113,54 @@ def _identifier_motifs(df):
     return df
 
 
-def charger_jours_paie(chemin_paie_source, annee, sep):
+_COLONNES_RECONSTRUIT_PAIE = ("Matricule", "Nom", "Prenom", "Entreprise", "Etablissement",
+                              "Siren", "Nic", "Siret", "Periode", "Motif",
+                              "Jours d'absence (retenu)")
+
+
+def _parser_reconstruit_paie(wb):
+    ws = wb.active
+    rows = ws.iter_rows(values_only=True)
+    header = list(next(rows))
+    idx = {c: header.index(c) for c in _COLONNES_RECONSTRUIT_PAIE}
+    lignes = []
+    for r in rows:
+        motif, jours = r[idx["Motif"]], r[idx["Jours d'absence (retenu)"]]
+        if not motif or jours in (None, ""):
+            continue
+        lignes.append({
+            "Matricule": normaliser_matricule(r[idx["Matricule"]]),
+            "Nom": r[idx["Nom"]], "Prenom": r[idx["Prenom"]],
+            "Entreprise": r[idx["Entreprise"]], "Etablissement": r[idx["Etablissement"]] or "",
+            "Siren": r[idx["Siren"]] or "", "Nic": r[idx["Nic"]] or "", "Siret": r[idx["Siret"]] or "",
+            "Mois": str(r[idx["Periode"]])[:7], "Motif": motif, "Jours": float(jours),
+        })
+    wb.close()
+    return pd.DataFrame(lignes)
+
+
+def charger_jours_paie(mapping):
     """{code entreprise: DataFrame(Matricule, Nom, Prenom, Etablissement, Siren, Nic,
-    Siret, Mois, Motif, Jours)} calculé depuis le CSV source PAIE_AUDIT.
+    Siret, Mois, Motif, Jours)} lu directement dans Reconstruit_PAIE_<code>.xlsx —
+    "Motif"/"Jours d'absence (retenu)" y sont déjà calculés par construire_reconstruit()
+    (src/chargement_paie.py, même logique qu'ici, cf. identifier_motifs). Le reconstruit
+    est le livrable final : on part de lui, pas du CSV source (cf. docstring module).
 
-    Un même (rubrique, libelle) peut légitimement compter pour plusieurs motifs à la
-    fois (cf. config.MOTIFS_PAIE_JOURS, ex. "Absence Paternite (Maintenue)"/3405 sous
-    maternité ET paternité) : la ligne est alors dupliquée (explode), une fois par motif."""
-    from src.chargement_paie import lire_paie
-    df = lire_paie(chemin_paie_source, annee=annee, sep=sep)
-    df = _identifier_motifs(df)
-    df = df.loc[df["_motifs"].apply(len) > 0].copy()
-    if df.empty:
-        cols = ["Entreprise", "Matricule", "Nom", "Prenom", "Etablissement", "Siren",
-               "Nic", "Siret", "Mois", "Motif", "Jours"]
-        return {}
-
-    df["_motifs"] = df["_motifs"].apply(list)
-    df = df.explode("_motifs")
-    df["Jours"] = to_num(df["base"])
-    df["Mois"] = df["periode"].str[:7]
-    df["Matricule"] = df["matricule"].apply(normaliser_matricule)
-
-    detail = (df.groupby(["entreprise", "Matricule", "nom", "prenom", "etablissement",
-                         "siren", "nic", "siret", "Mois", "_motifs"], as_index=False)
-                ["Jours"].sum())
-    detail = detail.rename(columns={"entreprise": "Entreprise", "nom": "Nom", "prenom": "Prenom",
-                                    "etablissement": "Etablissement", "siren": "Siren",
-                                    "nic": "Nic", "siret": "Siret", "_motifs": "Motif"})
-    return {ent: g.drop(columns=["Entreprise"]) for ent, g in detail.groupby("Entreprise")}
+    "Motif" peut contenir plusieurs valeurs séparées par ", " (rubrique comptant pour
+    plusieurs motifs à la fois, cf. config.MOTIFS_PAIE_JOURS) : la ligne est alors
+    dupliquée (explode), une fois par motif."""
+    resultat = {}
+    for code_paie in mapping.keys():
+        path = os.path.join(OUTPUT_DIR, nom_fichier_paie(code_paie))
+        detail = _lire_classeur_verrouille(path, _parser_reconstruit_paie)
+        if detail.empty:
+            resultat[code_paie] = detail
+            continue
+        detail = detail.assign(Motif=detail["Motif"].str.split(", ")).explode("Motif")
+        resultat[code_paie] = (detail.groupby(
+            ["Matricule", "Nom", "Prenom", "Entreprise", "Etablissement", "Siren", "Nic", "Siret",
+             "Mois", "Motif"], as_index=False)["Jours"].sum())
+    return resultat
 
 
 COLONNES_ANOMALIES = ["Entreprise", "Matricule", "Nom", "Prenom", "Mois", "Motif",
@@ -151,7 +177,7 @@ def detecter_anomalies_jours(chemin_paie_source, annee, sep):
     (date_sous_periode/num_sous_periode/date_retro sont à blanc sur ces lignes)."""
     from src.chargement_paie import lire_paie
     df = lire_paie(chemin_paie_source, annee=annee, sep=sep)
-    df = _identifier_motifs(df)
+    df = identifier_motifs(df)
     df = df.loc[df["_motifs"].apply(len) > 0].copy()
     if df.empty:
         return pd.DataFrame(columns=COLONNES_ANOMALIES)
@@ -423,3 +449,60 @@ def ecrire_comparatif_absences(detail_mensuel, detail_periode, anomalies, libell
 
     print(f"   ✅ écrit -> {out}")
     return out
+
+
+# ===============================================================
+# 5. FICHIER "JOURS D'ABSENCE" CÔTÉ PAIE (miroir du fichier DSN, livrable autonome)
+# ===============================================================
+COLONNES_ABSENCES_PAIE = ["Matricule", "Nom", "Prenom", "Entreprise", "Etablissement",
+                          "Siren", "Nic", "Siret", "Motif", "Mois",
+                          "Jours absence (mois)"]
+
+
+def nom_fichier_absences_paie(code):
+    """Livrable 1 (réunion du 2026-07-31, Solange) : « fichier nombre de jours d'absence
+    côté paye, miroir de celui déjà réalisé côté DSN ». Nommage volontairement proche de
+    celui du comparatif (Comparatif_jours_absence_PAIE_DSN.xlsx) pour que les deux se
+    retrouvent facilement ensemble, et distinct de Reconstruit_PAIE_<code>.xlsx (qui est
+    le détail brut par rubrique/PPU, pas le livrable "jours d'absence")."""
+    return f"Jours_Absence_PAIE_{code}.xlsx"
+
+
+def construire_absences_paie(jours_paie_par_code, identite_dsn=None):
+    """{code entreprise: DataFrame(COLONNES_ABSENCES_PAIE)} — même grain et même mesure
+    que charger_jours_paie() (une ligne par salarié/mois/motif), habillé pour être un
+    livrable autonome : Siren/Nic/Siret repris de la DSN quand disponibles (cf.
+    lire_identite_dsn_source), comme dans le comparatif."""
+    identite_dsn = identite_dsn or {}
+    resultat = {}
+    for code, df in jours_paie_par_code.items():
+        df = df.rename(columns={"Jours": "Jours absence (mois)"}).copy()
+        for col in ("Etablissement", "Siren", "Nic", "Siret"):
+            if col not in df.columns:
+                df[col] = ""
+            else:
+                df[col] = df[col].fillna("")
+        if identite_dsn:
+            reel = df["Matricule"].map(identite_dsn)
+            a_identite = reel.notna()
+            df.loc[a_identite, "Siren"] = reel[a_identite].apply(lambda t: t[0])
+            df.loc[a_identite, "Nic"] = reel[a_identite].apply(lambda t: t[1])
+            df.loc[a_identite, "Siret"] = reel[a_identite].apply(lambda t: t[2])
+        df["Entreprise"] = code
+        resultat[code] = df[COLONNES_ABSENCES_PAIE].sort_values(["Matricule", "Mois", "Motif"])
+    return resultat
+
+
+def ecrire_absences_paie(absences_par_code):
+    """Écrit un classeur par société dans output/xlsx/ (même dossier que les classeurs
+    DSN et PAIE déjà reconstruits) : Jours_Absence_PAIE_<code>.xlsx."""
+    fichiers = []
+    for code, df in absences_par_code.items():
+        out = os.path.join(OUTPUT_DIR, nom_fichier_absences_paie(code))
+        with pd.ExcelWriter(out, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Jours absence")
+            ws = writer.sheets["Jours absence"]
+            _styler_entete_et_filtre(ws, df)
+        print(f"   ✅ écrit -> {out}  ({len(df)} ligne(s))")
+        fichiers.append(out)
+    return fichiers

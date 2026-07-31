@@ -20,7 +20,10 @@ INPUT_FILE = "CLTINL0008_ABS-detailed-SS par mois calendaire_complete_2026 01 a 
 # 0. PARAMÈTRES
 # ===============================================================
 DATE_DEBUT_PERIODE = pd.Timestamp("2026-01-01")
-DATE_FIN_PERIODE   = pd.Timestamp("2026-03-31")
+DATE_FIN_PERIODE   = pd.Timestamp("2026-12-31")  # année 2026 complète. Le CSV source DSN
+# contient réellement des déclarations jusqu'en septembre 2026 (vérifié empiriquement, malgré
+# un nom de fichier qui suggère "01 à 03") — étendre cette période a donc un effet réel des
+# deux côtés, DSN comme PAIE, dans la limite de ce que couvre la source DSN (jusqu'à septembre).
 SEUIL_PREVOYANCE   = 91
 
 # Sociétés à traiter — un fichier de sortie par société. AURA en tête (cas POUYET/GANDOUZ).
