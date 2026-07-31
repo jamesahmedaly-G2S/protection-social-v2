@@ -180,3 +180,49 @@ MOTIFS_PAIE = {
         ("Paternité (non maintenue)", 3415),
     ],
 }
+
+# Sous-ensemble de MOTIFS_PAIE dont la colonne "Base" est un vrai nombre de jours
+# d'absence (vérifié empiriquement sur PAIE_AUDIT 2026 — cf. échanges de validation) :
+# la colonne "Base" est polymorphe, elle porte tantôt un nombre de jours, tantôt une
+# assiette de cotisation (montant en €), tantôt un taux d'acquisition de CP ou un nombre
+# d'épisodes, selon la rubrique. Seules les rubriques ci-dessous sont retenues pour le
+# calcul des jours d'absence ; les rubriques de cotisation (SS Maladie*, Complement*,
+# Accident du Travail RG/PIM/Apprenti, BS:SS*) et les cas ambigus (Maintien Maternité —
+# valeurs > 31 sur certaines lignes, Maintien Paternité — toujours à 0, "Dont CP acquis
+# sur maladie" — taux d'acquisition et non un nombre de jours, "Nombre d'arrêts
+# Maladie-AT" — un nombre d'épisodes et non un nombre de jours) en sont exclues.
+#
+# "CP - Abs AT/Maladie Pro." / "CP-Abs AT/Maladie Pro. NUL" (3680) sont EXCLUES : elles
+# doublonnent 3350 pour la même absence (ex. Janvier : 3350=31j + 3680=22j = 53j, plus
+# que les 31 jours du mois — physiquement impossible si les deux étaient des jours
+# indépendants). 3300/3480 en revanche sont conservées ensemble : leur somme colle au
+# nombre de jours du mois (maintenue vs non-maintenue d'une même absence), ce n'est pas
+# un doublon.
+#
+# 3350 ("Abs. Acc.Travail/Maladie Prof.") est classée ici sous "accident de travail",
+# pas "maladie" : vérifié sur des cas réels (ex. matricules 8172/8504/20773/20122) où le
+# motif DSN correspondant est "congé suite à accident de travail ou de service" (donc
+# canonisé "accident de travail" côté DSN, cf. canoniser_motif_dsn) — la classer sous
+# "maladie" créait un miroir artificiel : mêmes jours comptés "maladie" côté PAIE et
+# "accident de travail" côté DSN pour la même absence, gonflant les deux écarts à la fois.
+MOTIFS_PAIE_JOURS = {
+    "maladie": [
+        ("Annulation Maladie", 3200),
+        ("Absence Maladie", 3300),
+        ("Absence Maladie Covid", 3380),
+        ("Annul. Maladie", 3480),
+        ("Maladie non maintenue", 3480),
+    ],
+    "accident de travail": [
+        ("Annulation Accident travail", 3250),
+        ("Abs. Acc.Travail/Maladie Prof.", 3350),
+    ],
+    "maternité": [
+        ("Absence Maternite", 3390),
+    ],
+    "paternité": [
+        ("Absence Paternite (Maintenue)", 3405),
+        ("Paternite (non maintenue)", 3415),
+        ("Paternité (non maintenue)", 3415),
+    ],
+}
