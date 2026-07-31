@@ -27,19 +27,30 @@ Produit deux livrables distincts (+ un journal) :
   - COMPARATIF "jours d'absence PAIE <-> DSN" (livrable 3 de la même réunion —
     rapprochement DSN/paye via le pivot salarié) :
       output/rapports/Comparatif_jours_absence_PAIE_DSN.xlsx :
-        "1 - Détail mensuel"    : une ligne par salarié / mois / motif ;
-        "2 - Total Année 2026"  : une ligne par salarié / motif, sommée sur l'année 2026 ;
-        "3 - Anomalies (jours)" : lignes PAIE_AUDIT où "Base" est physiquement incohérente
+        "1 - Détail mensuel"       : une ligne par salarié / mois / motif ;
+        "2 - Total Année 2026"     : une ligne par salarié / motif, sommée sur l'année 2026 ;
+        "3 - Anomalies (jours)"    : lignes PAIE_AUDIT où "Base" est physiquement incohérente
           pour un mois (> 31 jours, ou négative hors annulation) — signalement, pas une
           correction automatique (aucune info exploitable en source pour arbitrer ; ce
           contrôle reste sur le CSV source, car c'est justement un diagnostic de qualité
           de la donnée brute, en amont du reconstruit).
-      Colonnes : Clé salarié (pivot), Nom, Prénom, Nom d'usage, NIR, Matricule, Entreprise,
-      Etablissement, Siren, Nic, Siret, Motif, Nombre de jours absence PAIE/DSN, Mois
-      absence (période), Écart constaté — avec filtre Excel cliquable sur chaque colonne.
-      Siren/Nic/Siret sont recoupés avec la source DSN (toujours à 0 dans PAIE_AUDIT.csv).
+        "4 - Synthèse OK par mois" : un tableau par société — pour chaque mois, combien de
+          salariés communs DSN/PAIE ont un total de jours d'absence identique (OK) et
+          combien ont un écart (Pas OK), avec le % OK (cf. réunion du 2026-07-31 : "pour
+          chaque société et chaque mois, combien de salariés sont OK / pas OK").
+        "5 - Traçabilité écarts"   : détail mensuel (grain motif) restreint aux salariés
+          "Pas OK" d'un mois donné, avec le total DSN/PAIE/écart du mois — pour permettre
+          la vérification / correction / arbitrage salarié par salarié.
+      Colonnes (onglets 1/2/5) : Clé salarié (pivot), Nom, Prénom, Nom d'usage, NIR,
+      Matricule, Entreprise, Etablissement, Siren, Nic, Siret, Motif, Nombre de jours
+      absence PAIE/DSN, Mois absence (période), Écart constaté — avec filtre Excel
+      cliquable sur chaque colonne. Siren/Nic/Siret sont recoupés avec la source DSN
+      (toujours à 0 dans PAIE_AUDIT.csv).
 
   - output/logs/execution/execution_absences_<ts>.log : déroulé + erreurs.
+  - output/logs/anomalies/ecarts_paie_dsn_<ts>.log : synthèse OK/Pas OK par société/mois
+    + traçabilité salarié par salarié des écarts détectés (même contenu que les onglets
+    "4"/"5", au format log pour un suivi / archivage indépendant du classeur Excel).
 
 Lancement :
     python main_absences.py
@@ -52,8 +63,8 @@ from src.logger_execution import configurer_logger, etape
 from src.comparaison_absences import (nom_fichier_dsn, nom_fichier_paie, charger_jours_dsn,
                                       charger_jours_paie, lire_identite_dsn_source, comparer_jours,
                                       comparer_jours_periode, detecter_anomalies_jours,
-                                      ecrire_comparatif_absences, construire_absences_paie,
-                                      ecrire_absences_paie)
+                                      construire_synthese_ok, ecrire_comparatif_absences,
+                                      construire_absences_paie, ecrire_absences_paie)
 
 
 def resoudre(nom_fichier):
@@ -128,23 +139,61 @@ def main():
                   f"PAIE={r['Nombre de jours absence PAIE']:.1f} j "
                   f"(écart {r['Écart constaté']:.1f})")
 
-        # 6. Détection des anomalies (diagnostic sur le CSV source, en amont du reconstruit)
-        etape(logger, 6, "Détection des anomalies (Base > 31j ou négative hors annulation).")
+        # 6. Synthèse OK/Pas OK par société et par mois + traçabilité des écarts salarié/mois
+        etape(logger, 6, "Synthèse OK/Pas OK par société et par mois (population des salariés communs).")
+        synthese_ok, tracabilite_ecarts = construire_synthese_ok(mapping, jours_dsn, jours_paie, detail)
+        for _, r in synthese_ok.iterrows():
+            logger.info(f"[{r['Entreprise']} / {r['Société DSN']}] {r['Mois']} : "
+                        f"{r['OK']}/{r['Salariés communs']} OK, {r['Pas OK']} écart(s) "
+                        f"({r['% OK']:.1%} OK).")
+        print(f"ℹ️  Synthèse OK/Pas OK : {len(tracabilite_ecarts[['Entreprise', 'Matricule', 'Mois absence (période)']].drop_duplicates())} "
+              f"salarié(s)/mois en écart sur {len(synthese_ok)} ligne(s) société/mois.")
+
+        # 6bis. Log dédié "ecarts_paie_dsn" (traçabilité salarié par salarié, pour vérif/correction/arbitrage)
+        logger_ecarts, chemin_ecarts = configurer_logger(config.LOG_ANO_DIR, horodatage,
+                                                          prefix="ecarts_paie_dsn",
+                                                          logger_name="ecarts_paie_dsn")
+        logger_ecarts.info("=" * 70)
+        logger_ecarts.info(f"SYNTHÈSE OK/PAS OK PAR SOCIÉTÉ ET PAR MOIS — run {horodatage}")
+        for _, r in synthese_ok.iterrows():
+            logger_ecarts.info(f"[{r['Entreprise']} / {r['Société DSN']}] {r['Mois']} : "
+                               f"{r['OK']}/{r['Salariés communs']} OK, {r['Pas OK']} écart(s) "
+                               f"({r['% OK']:.1%} OK).")
+        logger_ecarts.info("-" * 70)
+        logger_ecarts.info("TRAÇABILITÉ DES SALARIÉS EN ÉCART (un par mois, pour vérification/correction/arbitrage)")
+        vus = set()
+        for _, r in tracabilite_ecarts.iterrows():
+            cle = (r["Entreprise"], r["Matricule"], r["Mois absence (période)"])
+            if cle in vus:
+                continue
+            vus.add(cle)
+            logger_ecarts.warning(
+                f"[{r['Entreprise']}] Matricule {r['Matricule']} ({r['Nom']} {r['Prénom']}) — "
+                f"{r['Mois absence (période)']} : DSN={r['Total jours DSN (mois)']:.1f} j, "
+                f"PAIE={r['Total jours PAIE (mois)']:.1f} j, écart={r['Écart total (mois)']:.1f} j.")
+        for h in list(logger_ecarts.handlers):
+            h.flush()
+        logger.info(f"Log écarts_paie_dsn écrit : {chemin_ecarts} ({len(vus)} salarié(s)/mois en écart).")
+        print(f"⚠️  {len(vus)} salarié(s)/mois en écart -> détail dans {chemin_ecarts}")
+
+        # 7. Détection des anomalies (diagnostic sur le CSV source, en amont du reconstruit)
+        etape(logger, 7, "Détection des anomalies (Base > 31j ou négative hors annulation).")
         chemin_paie_source = resoudre(config.PAIE_INPUT_FILE)
         anomalies = detecter_anomalies_jours(chemin_paie_source, annee=config.ANNEE_PAIE, sep=config.PAIE_SEP)
         logger.info(f"{len(anomalies)} anomalie(s) détectée(s).")
         print(f"⚠️  {len(anomalies)} ligne(s) anormale(s) (jours incohérents pour un mois).")
 
-        # 7. LIVRABLE "jours d'absence côté paye" (miroir autonome du fichier DSN)
-        etape(logger, 7, "Écriture du LIVRABLE jours d'absence PAIE (Jours_Absence_PAIE_<code>.xlsx).")
+        # 8. LIVRABLE "jours d'absence côté paye" (miroir autonome du fichier DSN)
+        etape(logger, 8, "Écriture du LIVRABLE jours d'absence PAIE (Jours_Absence_PAIE_<code>.xlsx).")
         absences_paie = construire_absences_paie(jours_paie, identite_dsn=identite_dsn)
         fichiers_absences = ecrire_absences_paie(absences_paie)
         for f in fichiers_absences:
             logger.info(f"Livrable jours d'absence PAIE écrit : {f}")
 
-        # 8. COMPARATIF "jours d'absence PAIE <-> DSN"
-        etape(logger, 8, "Écriture du COMPARATIF PAIE <-> DSN (Comparatif_jours_absence_PAIE_DSN.xlsx).")
-        fichier = ecrire_comparatif_absences(detail, detail_annee, anomalies, libelle_periode=libelle_annee)
+        # 9. COMPARATIF "jours d'absence PAIE <-> DSN"
+        etape(logger, 9, "Écriture du COMPARATIF PAIE <-> DSN (Comparatif_jours_absence_PAIE_DSN.xlsx).")
+        fichier = ecrire_comparatif_absences(detail, detail_annee, anomalies, synthese_ok, tracabilite_ecarts,
+                                             libelle_periode=libelle_annee)
         logger.info(f"Comparatif écrit : {fichier}")
 
         logger.info(f"FIN D'EXÉCUTION COMPARATIF ABSENCES — run {horodatage} — statut : SUCCÈS")

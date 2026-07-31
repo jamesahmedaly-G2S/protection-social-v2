@@ -20,7 +20,8 @@ extraction DSN, jointure, export) : à consulter de haut en bas, section par sec
   4. EXPORT — classeur Excel avec les colonnes d'identité demandées, une clé pivot par
      salarié, et un filtre Excel cliquable sur chaque colonne (dont l'écart).
 
-Les deux reconstruits (PAIE et DSN) sont désormais restreints au 1er trimestre 2026 —
+Les deux reconstruits (PAIE et DSN) sont restreints à la même période (cf.
+config.DATE_DEBUT_PERIODE/DATE_FIN_PERIODE, actuellement l'année 2026 complète) —
 même périmètre des deux côtés, donc plus besoin de filtrer les mois nous-mêmes ici.
 """
 import os
@@ -400,6 +401,108 @@ def comparer_jours_periode(detail_mensuel, mois_retenus, libelle_periode="T1"):
     return agg[COLONNES_SORTIE]
 
 
+COLONNES_TRACABILITE = COLONNES_SORTIE + ["Total jours DSN (mois)", "Total jours PAIE (mois)",
+                                          "Écart total (mois)"]
+
+
+def construire_synthese_ok(mapping, jours_dsn_par_societe, jours_paie_par_code, detail_mensuel):
+    """Pour chaque société et chaque mois, sur la population des salariés COMMUNS aux
+    deux sources (matricule présent au moins une fois côté DSN ET au moins une fois côté
+    PAIE, sur toute la période), compte combien ont un total de jours d'absence identique
+    (DSN = PAIE, tous motifs confondus ce mois-là) et combien ont un écart. Même critère
+    "OK" que la colonne "Écart constaté" du détail mensuel (== 0), simplement agrégé au
+    niveau salarié/mois plutôt que salarié/mois/motif : c'est le total mensuel du salarié
+    qu'on doit comparer, pas motif par motif — un salarié sans aucune absence ce mois-là
+    des deux côtés (0 = 0) compte comme OK.
+
+    Les mois comparés sont limités à l'INTERSECTION des mois couverts par le DSN et par
+    la PAIE (pas l'union) : la source PAIE_AUDIT.csv s'arrête actuellement à juin 2026
+    alors que la DSN va jusqu'à septembre (cf. config.py) — sur juillet/août/septembre,
+    la PAIE n'a aucune ligne du tout, donc comparer produirait un 0 = 0 trivial pour tout
+    salarié sans arrêt DSN ce mois-là, ce qui gonflerait artificiellement le taux "OK"
+    sans rien valider (constaté : ~97-99% de faux "OK" sur ces mois avant correction,
+    cf. échange du 2026-07-31).
+
+    Renvoie (synthese, tracabilite) :
+      - synthese : une ligne par (société, mois) — Salariés communs / OK / Pas OK / % OK,
+        pour le tableau de bord (un tableau par société une fois exporté) ;
+      - tracabilite : le détail mensuel (grain motif), restreint aux (salarié, mois) où
+        le total ne correspond pas, avec en plus le total DSN/PAIE/écart du mois pour ce
+        salarié — pour permettre la vérification / correction / arbitrage au cas par cas.
+    """
+    lignes_synthese = []
+    blocs_tracabilite = []
+
+    for code_paie, societe_dsn in mapping.items():
+        dsn_df = jours_dsn_par_societe.get(societe_dsn)
+        paie_df = jours_paie_par_code.get(code_paie)
+        dsn_mats = set(dsn_df["Matricule"]) if dsn_df is not None and not dsn_df.empty else set()
+        paie_mats = set(paie_df["Matricule"]) if paie_df is not None and not paie_df.empty else set()
+        communs = dsn_mats & paie_mats
+        if not communs:
+            continue
+
+        mois_dsn = set(dsn_df["Mois"]) if dsn_df is not None and not dsn_df.empty else set()
+        mois_paie = set(paie_df["Mois"]) if paie_df is not None and not paie_df.empty else set()
+        # Intersection, PAS union : sur un mois où la PAIE n'a aucune ligne du tout (ex.
+        # juillet-septembre 2026, hors périmètre actuel de PAIE_AUDIT.csv), comparer
+        # produirait un 0 = 0 trivial pour tout salarié sans arrêt DSN ce mois-là, ce qui
+        # gonflerait artificiellement le taux "OK" sans rien valider.
+        mois_pertinents = sorted(mois_dsn & mois_paie)
+        if not mois_pertinents:
+            continue
+
+        sous_detail = detail_mensuel.loc[detail_mensuel["Entreprise"] == code_paie]
+        agg = (sous_detail.groupby(["Matricule", "Mois absence (période)"], as_index=False)
+                          [["Nombre de jours absence PAIE", "Nombre de jours absence DSN"]].sum())
+
+        index_complet = pd.MultiIndex.from_product([sorted(communs), mois_pertinents],
+                                                    names=["Matricule", "Mois absence (période)"])
+        agg_complet = (agg.set_index(["Matricule", "Mois absence (période)"])
+                          .reindex(index_complet, fill_value=0.0)
+                          .reset_index())
+        agg_complet["Écart total (mois)"] = (agg_complet["Nombre de jours absence DSN"] -
+                                             agg_complet["Nombre de jours absence PAIE"])
+        agg_complet["OK"] = agg_complet["Écart total (mois)"].abs() < 1e-6
+
+        for mois, groupe in agg_complet.groupby("Mois absence (période)"):
+            nb_ok = int(groupe["OK"].sum())
+            total = len(groupe)
+            lignes_synthese.append({
+                "Entreprise": code_paie, "Société DSN": societe_dsn, "Mois": mois,
+                "Salariés communs": total, "OK": nb_ok, "Pas OK": total - nb_ok,
+                "% OK": (nb_ok / total) if total else 0.0,
+            })
+
+        pas_ok = agg_complet.loc[~agg_complet["OK"], ["Matricule", "Mois absence (période)",
+                                                       "Nombre de jours absence DSN",
+                                                       "Nombre de jours absence PAIE",
+                                                       "Écart total (mois)"]]
+        if not pas_ok.empty:
+            pas_ok = pas_ok.rename(columns={
+                "Nombre de jours absence DSN": "Total jours DSN (mois)",
+                "Nombre de jours absence PAIE": "Total jours PAIE (mois)",
+            })
+            fusion = pd.merge(sous_detail, pas_ok, on=["Matricule", "Mois absence (période)"], how="inner")
+            blocs_tracabilite.append(fusion)
+
+    synthese = pd.DataFrame(lignes_synthese)
+    if not synthese.empty:
+        synthese = synthese.sort_values(["Entreprise", "Mois"]).reset_index(drop=True)
+    else:
+        synthese = pd.DataFrame(columns=["Entreprise", "Société DSN", "Mois", "Salariés communs",
+                                         "OK", "Pas OK", "% OK"])
+
+    if blocs_tracabilite:
+        tracabilite = pd.concat(blocs_tracabilite, ignore_index=True)
+        tracabilite = tracabilite[COLONNES_TRACABILITE].sort_values(
+            ["Entreprise", "Matricule", "Mois absence (période)", "Motif"]).reset_index(drop=True)
+    else:
+        tracabilite = pd.DataFrame(columns=COLONNES_TRACABILITE)
+
+    return synthese, tracabilite
+
+
 # ===============================================================
 # 4. EXPORT EXCEL
 # ===============================================================
@@ -440,12 +543,70 @@ def _ecrire_onglet_anomalies(writer, df, nom_onglet):
             ws.cell(i, j).fill = PatternFill("solid", fgColor=ORANGEF)
 
 
-def ecrire_comparatif_absences(detail_mensuel, detail_periode, anomalies, libelle_periode="T1"):
+def _ecrire_onglet_synthese(writer, synthese, nom_onglet):
+    """Un tableau par société (empilés dans le même onglet, séparés par une ligne
+    vide) : Mois / Salariés communs / OK / Pas OK / % OK. Vert si tout le monde est
+    OK ce mois-là, rouge si personne ne l'est, orange sinon."""
+    wb = writer.book
+    ws = wb.create_sheet(nom_onglet)
+    entetes = ["Mois", "Salariés communs", "OK", "Pas OK", "% OK"]
+    r = 1
+    if synthese.empty:
+        for j, h in enumerate(entetes, start=1):
+            ws.cell(r, j, h)
+    else:
+        for entreprise, groupe in synthese.groupby("Entreprise", sort=False):
+            societe_dsn = groupe["Société DSN"].iloc[0]
+            titre = ws.cell(r, 1, f"{entreprise} ({societe_dsn})")
+            titre.font = Font(bold=True, size=11, color="FFFFFF")
+            for j in range(1, len(entetes) + 1):
+                ws.cell(r, j).fill = PatternFill("solid", fgColor=NAVY)
+            r += 1
+            for j, h in enumerate(entetes, start=1):
+                c = ws.cell(r, j, h)
+                c.font = Font(bold=True, size=10)
+                c.fill = PatternFill("solid", fgColor="D9D9D9")
+            r += 1
+            for _, ligne in groupe.iterrows():
+                ws.cell(r, 1, ligne["Mois"])
+                ws.cell(r, 2, int(ligne["Salariés communs"]))
+                ws.cell(r, 3, int(ligne["OK"]))
+                ws.cell(r, 4, int(ligne["Pas OK"]))
+                c = ws.cell(r, 5, round(float(ligne["% OK"]), 3))
+                c.number_format = "0.0%"
+                if ligne["Pas OK"] == 0:
+                    fond = GREENF
+                elif ligne["OK"] == 0:
+                    fond = REDF
+                else:
+                    fond = ORANGEF
+                for j in range(1, len(entetes) + 1):
+                    ws.cell(r, j).fill = PatternFill("solid", fgColor=fond)
+                r += 1
+            r += 1  # ligne vide entre deux sociétés
+    for col, largeur in zip("ABCDE", (28, 16, 8, 10, 10)):
+        ws.column_dimensions[col].width = largeur
+
+
+def _ecrire_onglet_tracabilite(writer, tracabilite, nom_onglet):
+    df = tracabilite if not tracabilite.empty else pd.DataFrame(columns=COLONNES_TRACABILITE)
+    df.to_excel(writer, index=False, sheet_name=nom_onglet)
+    ws = writer.sheets[nom_onglet]
+    _styler_entete_et_filtre(ws, df)
+    j_ecart = list(df.columns).index("Écart total (mois)") + 1
+    for i in range(2, len(df) + 2):
+        ws.cell(i, j_ecart).fill = PatternFill("solid", fgColor=REDF)
+
+
+def ecrire_comparatif_absences(detail_mensuel, detail_periode, anomalies, synthese_ok, tracabilite_ecarts,
+                               libelle_periode="T1"):
     out = os.path.join(RAPPORT_DIR, NOM_FICHIER_SORTIE)
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
         _ecrire_onglet(writer, detail_mensuel, "1 - Détail mensuel")
         _ecrire_onglet(writer, detail_periode, f"2 - Total {libelle_periode}")
         _ecrire_onglet_anomalies(writer, anomalies, "3 - Anomalies (jours)")
+        _ecrire_onglet_synthese(writer, synthese_ok, "4 - Synthèse OK par mois")
+        _ecrire_onglet_tracabilite(writer, tracabilite_ecarts, "5 - Traçabilité écarts")
 
     print(f"   ✅ écrit -> {out}")
     return out
