@@ -50,15 +50,16 @@ def resoudre(nom_fichier):
 def _log_synthese(logger, prefixe, synthese):
     for ligne in synthese:
         logger.info(f"[{prefixe}] {ligne['Société DSN']} / {ligne['Société PAIE']} : "
-                    f"{ligne['Communs']}/{ligne['Salariés DSN (avec arrêt)']} salariés DSN "
+                    f"{ligne['Salariés communs']}/{ligne['Salariés DSN']} salariés DSN "
                     f"retrouvés dans PAIE.")
         print(f"ℹ️  [{prefixe}] {ligne['Société DSN']} / {ligne['Société PAIE']} : "
-              f"{ligne['Communs']}/{ligne['Salariés DSN (avec arrêt)']} retrouvés.")
+              f"{ligne['Salariés communs']}/{ligne['Salariés DSN']} retrouvés.")
 
 
 def main():
     os.makedirs(config.RAPPORT_DIR, exist_ok=True)
     horodatage = datetime.now().strftime("%Y%m%d_%H%M%S")
+    date_sortie = datetime.now().strftime("%d-%m-%Y")  # date de génération, ajoutée au nom du livrable
     logger, chemin_exec = configurer_logger(config.LOG_EXEC_DIR, horodatage,
                                             prefix="execution_comparatif",
                                             logger_name="execution_comparatif")
@@ -128,7 +129,7 @@ def main():
             # Noms courts : limite Excel de 31 caractères par nom d'onglet (cf. "n - Comparatif (titre)").
             ("pér. reconstr.", synth_periode_reco, detail_periode_reco),
             ("pér. sources", synth_periode_src, detail_periode_src),
-        ])
+        ], date_sortie)
         logger.info(f"Classeur écrit : {fichier}")
 
         logger.info(f"FIN D'EXÉCUTION COMPARATIF PAIE/DSN — run {horodatage} — statut : SUCCÈS")

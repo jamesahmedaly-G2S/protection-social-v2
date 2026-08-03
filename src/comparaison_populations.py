@@ -86,7 +86,11 @@ def charger_dsn_reconstruits(mapping):
 
 
 def charger_paie_reconstruits(mapping):
-    """{code PAIE: {matricule: (nom, prénom)}} depuis les classeurs PAIE reconstruits."""
+    """{code PAIE: {matricule: (nom, prénom)}} depuis les classeurs PAIE reconstruits —
+    toute la population payée (pas seulement ceux avec un motif d'absence identifié) :
+    ce niveau de comparaison vérifie que chaque salarié DSN en arrêt existe bien dans
+    la paie, pas que la PAIE a correctement qualifié son absence (ça, c'est le rôle du
+    comparatif jours d'absence, cf. Comparatif_jours_absence_PAIE_DSN_<code>.xlsx)."""
     return {code_paie: lire_salaries(os.path.join(OUTPUT_DIR, nom_fichier_paie(code_paie)),
                                      "Matricule", "Nom", "Prenom")
             for code_paie in mapping.keys()}
@@ -121,9 +125,10 @@ def lire_population_dsn_source(path):
 
 def lire_population_paie_source(path, annee, sep, date_debut=None, date_fin=None):
     """Population brute par entreprise directement depuis PAIE_AUDIT.csv (année filtrée,
-    avant toute jointure PPU) : {entreprise: {matricule normalisé: (nom, prénom)}}.
-    Si date_debut/date_fin sont fournies (colonne "periode"), restreint en plus à cette
-    fenêtre — sert à comparer à isopérimètre avec le DSN, qui ne couvre que Q1 2026."""
+    avant toute jointure PPU) : {entreprise: {matricule normalisé: (nom, prénom)}} —
+    toute la population payée (cf. charger_paie_reconstruits pour le même principe côté
+    reconstruits). Si date_debut/date_fin sont fournies (colonne "periode"), restreint
+    en plus à cette fenêtre — sert à comparer à isopérimètre avec le DSN."""
     from src.chargement_paie import lire_paie, decouper_par_entreprise
     df = lire_paie(path, annee=annee, sep=sep)
     if date_debut is not None and date_fin is not None:
@@ -147,20 +152,23 @@ def lire_population_paie_source(path, annee, sep, date_debut=None, date_fin=None
 # Comparaison (générique, commune à tous les niveaux)
 # ===============================================================
 def _comparer_deux_populations(dsn_pop, paie_pop, societe_dsn, code_paie):
-    """Compare deux {matricule: (nom, prénom)} pour une paire de sociétés.
-    Renvoie (ligne_synthese, lignes_detail)."""
+    """Compare deux {matricule: (nom, prénom)} pour une paire de sociétés : côté DSN,
+    les salariés ayant une absence (un motif d'arrêt) — le DSN ne contient par
+    construction que ceux-là ; côté PAIE, toute la population payée (cf.
+    charger_paie_reconstruits / lire_population_paie_source) — on vérifie ici que
+    chaque salarié DSN en arrêt existe bien dans la paie, pas qu'elle a qualifié son
+    absence (ça, c'est le rôle du comparatif jours d'absence). Renvoie
+    (ligne_synthese, lignes_detail)."""
     manquants = sorted(set(dsn_pop) - set(paie_pop))
     n_communs = len(dsn_pop) - len(manquants)
 
     ligne_synthese = {
         "Société DSN": societe_dsn,
         "Société PAIE": code_paie,
-        "Salariés PAIE (population payée)": len(paie_pop),
-        "Salariés DSN (avec arrêt)": len(dsn_pop),
-        "Communs": n_communs,
-        "DSN sans PAIE (à vérifier)": len(manquants),
-        "PAIE sans arrêt DSN": len(paie_pop) - n_communs,
-        "Taux de correspondance DSN->PAIE": (n_communs / len(dsn_pop)) if dsn_pop else None,
+        "Salariés PAIE": len(paie_pop),
+        "Salariés DSN": len(dsn_pop),
+        "Salariés communs": n_communs,
+        "Taux de correspondance": (n_communs / len(dsn_pop)) if dsn_pop else None,
     }
 
     lignes_detail = []

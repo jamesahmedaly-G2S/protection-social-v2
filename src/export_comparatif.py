@@ -26,7 +26,7 @@ def _ecrire_synthese(writer, synthese, nom_onglet):
     df.to_excel(writer, index=False, sheet_name=nom_onglet)
     ws = writer.sheets[nom_onglet]
     _styler_entete(ws)
-    for i, taux in enumerate(df["Taux de correspondance DSN->PAIE"], start=2):
+    for i, taux in enumerate(df["Taux de correspondance"], start=2):
         fill = GREENF if taux == 1 else REDF
         for j in range(1, len(df.columns) + 1):
             ws.cell(i, j).fill = PatternFill("solid", fgColor=fill)
@@ -48,11 +48,14 @@ def _ecrire_detail(writer, detail, nom_onglet):
             ws.cell(i, j).fill = PatternFill("solid", fgColor=fill)
 
 
-def ecrire_comparatif(niveaux):
+def ecrire_comparatif(niveaux, date_sortie):
     """niveaux : liste de (titre_court, synthese, detail), un triplet par niveau de
     comparaison (ex. "reconstruits", "sources brutes", "T1 (reconstruits)", ...).
-    Écrit 2 onglets par niveau (synthèse + détail), numérotés dans l'ordre fourni."""
-    out = os.path.join(RAPPORT_DIR, COMPARATIF_XLSX)
+    Écrit 2 onglets par niveau (synthèse + détail), numérotés dans l'ordre fourni.
+    `date_sortie` : date du jour de génération au format JJ-MM-AAAA, ajoutée à la fin
+    du nom de fichier (cf. demande du 2026-08-03)."""
+    base, ext = os.path.splitext(COMPARATIF_XLSX)
+    out = os.path.join(RAPPORT_DIR, f"{base}_{date_sortie}{ext}")
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
         n = 1
         for titre, synthese, detail in niveaux:

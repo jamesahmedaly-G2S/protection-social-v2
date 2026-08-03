@@ -37,7 +37,11 @@ from openpyxl.utils import get_column_letter
 from config import MOTIFS_PAIE_JOURS, OUTPUT_DIR, RAPPORT_DIR
 from src.normalisation import _norm_soc, to_num
 
-NOM_FICHIER_SORTIE = "Comparatif_jours_absence_PAIE_DSN.xlsx"
+def nom_fichier_comparatif_absences(code, date_sortie):
+    """Un classeur par société (cf. demande du 2026-08-03, cohérent avec les autres
+    livrables PAIE déjà séparés par société) : Comparatif_jours_absence_PAIE_DSN_<code>_
+    <date_sortie>.xlsx. `date_sortie` : date du jour de génération au format JJ-MM-AAAA."""
+    return f"Comparatif_jours_absence_PAIE_DSN_{code}_{date_sortie}.xlsx"
 
 
 # ===============================================================
@@ -406,29 +410,35 @@ COLONNES_TRACABILITE = COLONNES_SORTIE + ["Total jours DSN (mois)", "Total jours
 
 
 def construire_synthese_ok(mapping, detail_mensuel):
-    """Synthèse OK/Pas OK par société et par mois, calculée DIRECTEMENT à partir du
-    détail mensuel (onglet "1 - Détail mensuel", le DataFrame produit par comparer_jours)
-    — pas de population reconstruite indépendamment (ex. tous les salariés "communs" aux
-    deux sources sur toute la période, complétée par des 0 = 0 pour les mois sans
-    absence). La population de référence pour un (société, mois) donné est exactement
-    celle qui a au moins une ligne dans le détail mensuel pour ce (société, mois) — un
-    salarié sans aucune ligne ce mois-là n'est pas compté. Les deux onglets restent ainsi
-    strictement cohérents (cf. échange du 2026-07-31 : "l'onglet synthèse OK devrait
-    partir du détail mensuel et refléter la réalité").
+    """Synthèse des jours d'arrêt DSN vs PAIE par société et par mois, calculée
+    DIRECTEMENT à partir du détail mensuel (onglet "1 - Détail mensuel", le DataFrame
+    produit par comparer_jours) — pas de population reconstruite indépendamment (ex.
+    tous les salariés "communs" aux deux sources sur toute la période, complétée par des
+    0 = 0 pour les mois sans absence). La population de référence pour un (société,
+    mois) donné est exactement celle qui a au moins une ligne dans le détail mensuel
+    pour ce (société, mois) — un salarié sans aucune ligne ce mois-là n'est pas compté.
+    Les deux onglets restent ainsi strictement cohérents (cf. échange du 2026-07-31:
+    "l'onglet synthèse devrait partir du détail mensuel et refléter la réalité").
 
-    "OK" : le total mensuel du salarié (DSN vs PAIE, tous motifs confondus ce mois-là)
-    correspond exactement — même critère que la colonne "Écart constaté", simplement
-    agrégé au niveau salarié/mois plutôt que salarié/mois/motif (motifs hors périmètre
-    ici, cf. demande du 2026-07-31).
+    Un salarié est en écart un mois donné quand son total mensuel (DSN vs PAIE, tous
+    motifs confondus ce mois-là) ne correspond pas exactement — même critère que la
+    colonne "Écart constaté", simplement agrégé au niveau salarié/mois plutôt que
+    salarié/mois/motif (motifs hors périmètre ici, cf. demande du 2026-07-31). Ce critère
+    sert à construire la traçabilité (ci-dessous) ; la synthèse elle-même totalise les
+    jours, elle ne compte plus les salariés individuellement en OK/Pas OK (cf. demande du
+    2026-08-03 : partir des vrais volumes de jours plutôt que d'un comptage par salarié).
 
     Renvoie (synthese, tracabilite) :
-      - synthese : une ligne par (société, mois) — Salariés / OK / Pas OK / % OK, pour
-        le tableau de bord (un tableau par société une fois exporté) ;
+      - synthese : une ligne par (société, mois) — Mois, Salariés en communs, Nombre de
+        jours d'arrêt en DSN, Nombre de jours d'arrêt en PAIE, Écart constaté (somme des
+        écarts individuels du mois) — un tableau par société une fois exporté ;
       - tracabilite : le détail mensuel (grain motif), restreint aux (salarié, mois) où
         le total ne correspond pas, avec en plus le total DSN/PAIE/écart du mois pour ce
         salarié — pour permettre la vérification / correction / arbitrage au cas par cas.
     """
-    colonnes_synthese = ["Entreprise", "Société DSN", "Mois", "Salariés", "OK", "Pas OK", "% OK"]
+    colonnes_synthese = ["Entreprise", "Société DSN", "Mois", "Salariés en communs",
+                         "Nombre de jours d'arrêt en DSN", "Nombre de jours d'arrêt en PAIE",
+                         "Écart constaté"]
     if detail_mensuel.empty:
         return (pd.DataFrame(columns=colonnes_synthese), pd.DataFrame(columns=COLONNES_TRACABILITE))
 
@@ -439,12 +449,12 @@ def construire_synthese_ok(mapping, detail_mensuel):
 
     lignes_synthese = []
     for (entreprise, mois), groupe in agg.groupby(["Entreprise", "Mois absence (période)"]):
-        nb_ok = int(groupe["OK"].sum())
-        total = len(groupe)
         lignes_synthese.append({
-            "Entreprise": entreprise, "Société DSN": mapping.get(entreprise, ""),
-            "Mois": mois, "Salariés": total, "OK": nb_ok, "Pas OK": total - nb_ok,
-            "% OK": (nb_ok / total) if total else 0.0,
+            "Entreprise": entreprise, "Société DSN": mapping.get(entreprise, ""), "Mois": mois,
+            "Salariés en communs": len(groupe),
+            "Nombre de jours d'arrêt en DSN": groupe["Nombre de jours absence DSN"].sum(),
+            "Nombre de jours d'arrêt en PAIE": groupe["Nombre de jours absence PAIE"].sum(),
+            "Écart constaté": groupe["Écart total (mois)"].sum(),
         })
     synthese = pd.DataFrame(lignes_synthese, columns=colonnes_synthese).sort_values(
         ["Entreprise", "Mois"]).reset_index(drop=True)
@@ -508,12 +518,14 @@ def _ecrire_onglet_anomalies(writer, df, nom_onglet):
 
 def _ecrire_onglet_synthese(writer, synthese, nom_onglet):
     """Un tableau par société (empilés dans le même onglet, séparés par une ligne
-    vide) : Mois / Salariés / OK / Pas OK / % OK. "Salariés" = ceux qui apparaissent
-    dans le détail mensuel ce mois-là (cf. construire_synthese_ok). Vert si tout le
-    monde est OK ce mois-là, rouge si personne ne l'est, orange sinon."""
+    vide) : Mois / Salariés en communs / Nombre de jours d'arrêt en DSN / Nombre de
+    jours d'arrêt en PAIE / Écart constaté. "Salariés en communs" = ceux qui
+    apparaissent dans le détail mensuel ce mois-là (cf. construire_synthese_ok). Vert
+    si l'écart du mois est nul, rouge sinon."""
     wb = writer.book
     ws = wb.create_sheet(nom_onglet)
-    entetes = ["Mois", "Salariés", "OK", "Pas OK", "% OK"]
+    entetes = ["Mois", "Salariés en communs", "Nombre de jours d'arrêt en DSN",
+              "Nombre de jours d'arrêt en PAIE", "Écart constaté"]
     r = 1
     if synthese.empty:
         for j, h in enumerate(entetes, start=1):
@@ -533,22 +545,16 @@ def _ecrire_onglet_synthese(writer, synthese, nom_onglet):
             r += 1
             for _, ligne in groupe.iterrows():
                 ws.cell(r, 1, ligne["Mois"])
-                ws.cell(r, 2, int(ligne["Salariés"]))
-                ws.cell(r, 3, int(ligne["OK"]))
-                ws.cell(r, 4, int(ligne["Pas OK"]))
-                c = ws.cell(r, 5, round(float(ligne["% OK"]), 3))
-                c.number_format = "0.0%"
-                if ligne["Pas OK"] == 0:
-                    fond = GREENF
-                elif ligne["OK"] == 0:
-                    fond = REDF
-                else:
-                    fond = ORANGEF
+                ws.cell(r, 2, int(ligne["Salariés en communs"]))
+                ws.cell(r, 3, float(ligne["Nombre de jours d'arrêt en DSN"]))
+                ws.cell(r, 4, float(ligne["Nombre de jours d'arrêt en PAIE"]))
+                ws.cell(r, 5, float(ligne["Écart constaté"]))
+                fond = GREENF if ligne["Écart constaté"] == 0 else REDF
                 for j in range(1, len(entetes) + 1):
                     ws.cell(r, j).fill = PatternFill("solid", fgColor=fond)
                 r += 1
             r += 1  # ligne vide entre deux sociétés
-    for col, largeur in zip("ABCDE", (28, 16, 8, 10, 10)):
+    for col, largeur in zip("ABCDE", (14, 18, 24, 24, 16)):
         ws.column_dimensions[col].width = largeur
 
 
@@ -562,18 +568,30 @@ def _ecrire_onglet_tracabilite(writer, tracabilite, nom_onglet):
         ws.cell(i, j_ecart).fill = PatternFill("solid", fgColor=REDF)
 
 
-def ecrire_comparatif_absences(detail_mensuel, detail_periode, anomalies, synthese_ok, tracabilite_ecarts,
-                               libelle_periode="T1"):
-    out = os.path.join(RAPPORT_DIR, NOM_FICHIER_SORTIE)
-    with pd.ExcelWriter(out, engine="openpyxl") as writer:
-        _ecrire_onglet(writer, detail_mensuel, "1 - Détail mensuel")
-        _ecrire_onglet(writer, detail_periode, f"2 - Total {libelle_periode}")
-        _ecrire_onglet_anomalies(writer, anomalies, "3 - Anomalies (jours)")
-        _ecrire_onglet_synthese(writer, synthese_ok, "4 - Synthèse OK par mois")
-        _ecrire_onglet_tracabilite(writer, tracabilite_ecarts, "5 - Traçabilité écarts")
-
-    print(f"   ✅ écrit -> {out}")
-    return out
+def ecrire_comparatif_absences(mapping, detail_mensuel, detail_periode, anomalies, synthese_ok,
+                               tracabilite_ecarts, date_sortie, libelle_periode="T1"):
+    """Écrit UN CLASSEUR PAR SOCIÉTÉ (cf. demande du 2026-08-03) : chaque société de
+    `mapping` reçoit son propre Comparatif_jours_absence_PAIE_DSN_<code>_<date_sortie>.xlsx,
+    avec les 5 mêmes onglets qu'auparavant mais filtrés sur cette société (toutes les
+    DataFrames en entrée portent une colonne "Entreprise" = code PAIE). Renvoie la liste
+    des chemins de fichiers écrits."""
+    fichiers = []
+    for code_paie in mapping.keys():
+        out = os.path.join(RAPPORT_DIR, nom_fichier_comparatif_absences(code_paie, date_sortie))
+        sous_detail = detail_mensuel.loc[detail_mensuel["Entreprise"] == code_paie]
+        sous_periode = detail_periode.loc[detail_periode["Entreprise"] == code_paie]
+        sous_anomalies = anomalies.loc[anomalies["Entreprise"] == code_paie]
+        sous_synthese = synthese_ok.loc[synthese_ok["Entreprise"] == code_paie]
+        sous_tracabilite = tracabilite_ecarts.loc[tracabilite_ecarts["Entreprise"] == code_paie]
+        with pd.ExcelWriter(out, engine="openpyxl") as writer:
+            _ecrire_onglet(writer, sous_detail, "1 - Détail mensuel")
+            _ecrire_onglet(writer, sous_periode, f"2 - Total {libelle_periode}")
+            _ecrire_onglet_anomalies(writer, sous_anomalies, "3 - Anomalies (jours)")
+            _ecrire_onglet_synthese(writer, sous_synthese, "4 - Jours DSN vs PAIE")
+            _ecrire_onglet_tracabilite(writer, sous_tracabilite, "5 - Traçabilité écarts")
+        print(f"   ✅ écrit -> {out}")
+        fichiers.append(out)
+    return fichiers
 
 
 # ===============================================================
@@ -584,13 +602,14 @@ COLONNES_ABSENCES_PAIE = ["Matricule", "Nom", "Prenom", "Entreprise", "Etablisse
                           "Jours absence (mois)"]
 
 
-def nom_fichier_absences_paie(code):
+def nom_fichier_absences_paie(code, date_sortie):
     """Livrable 1 (réunion du 2026-07-31, Solange) : « fichier nombre de jours d'absence
     côté paye, miroir de celui déjà réalisé côté DSN ». Nommage volontairement proche de
     celui du comparatif (Comparatif_jours_absence_PAIE_DSN.xlsx) pour que les deux se
     retrouvent facilement ensemble, et distinct de Reconstruit_PAIE_<code>.xlsx (qui est
-    le détail brut par rubrique/PPU, pas le livrable "jours d'absence")."""
-    return f"Jours_Absence_PAIE_{code}.xlsx"
+    le détail brut par rubrique/PPU, pas le livrable "jours d'absence"). `date_sortie` :
+    date du jour de génération au format JJ-MM-AAAA (cf. demande du 2026-08-03)."""
+    return f"Jours_Absence_PAIE_{code}_{date_sortie}.xlsx"
 
 
 def construire_absences_paie(jours_paie_par_code, identite_dsn=None):
@@ -618,12 +637,12 @@ def construire_absences_paie(jours_paie_par_code, identite_dsn=None):
     return resultat
 
 
-def ecrire_absences_paie(absences_par_code):
+def ecrire_absences_paie(absences_par_code, date_sortie):
     """Écrit un classeur par société dans output/xlsx/ (même dossier que les classeurs
-    DSN et PAIE déjà reconstruits) : Jours_Absence_PAIE_<code>.xlsx."""
+    DSN et PAIE déjà reconstruits) : Jours_Absence_PAIE_<code>_<date_sortie>.xlsx."""
     fichiers = []
     for code, df in absences_par_code.items():
-        out = os.path.join(OUTPUT_DIR, nom_fichier_absences_paie(code))
+        out = os.path.join(OUTPUT_DIR, nom_fichier_absences_paie(code, date_sortie))
         with pd.ExcelWriter(out, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="Jours absence")
             ws = writer.sheets["Jours absence"]
