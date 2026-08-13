@@ -13,7 +13,13 @@ LOG_ANO_DIR  = os.path.join(LOG_DIR, "anomalies")   # journaux d'anomalies méti
 RAPPORT_DIR = os.path.join(BASE_DIR, "output", "rapports")
 
 # --- Fichier source DSN (déposer dans data/input/) ---
-INPUT_FILE = "CLTINL0008_ABS-detailed-SS par mois calendaire_complete_2026 01 a 03_v11-06-2026.csv"
+# Mis à jour le 2026-08-03 : l'ancien fichier (v11-06-2026, "01 a 03") ne contenait que
+# 2512 lignes, très incomplet sur avril-septembre (ex. seulement 99+43 lignes pour
+# mai+juin) — confirmé responsable du "retard DSN" observé sur les plus gros écarts du
+# comparatif jours d'absence. Le nouveau fichier (v09-07-2026, "01 a 06") contient 4185
+# lignes, bien plus complet sur ces mois (505+348 pour mai+juin) et couvre même
+# partiellement octobre à décembre.
+INPUT_FILE = "CLTINL0008_ABS-detailed-SS par mois calendaire_complete_2026 01 a 06_v09-07-2026.csv"
 
 # --- Paramètres métier ---
 # ===============================================================
@@ -118,75 +124,12 @@ COMPARATIF_XLSX = "Comparatif_populations_PAIE_DSN.xlsx"
 # IJSS (absences prises en charge par la Sécurité Sociale), validées avec le métier.
 # ===============================================================
 # {motif: [(libellé, code rubrique), ...]} — liste et non dict, volontairement : un même
-# libellé peut légitimement porter plusieurs codes (ex. "Accident du Travail" -> 4400/
-# 4401/4420 selon le régime), et un même (rubrique, libellé) peut apparaître sous deux
-# motifs à la fois (ex. "Reg Paternité"/1300 sous maternité ET paternité) — un dict
-# écraserait ces doublons silencieusement. Clé d'identification côté PAIE_AUDIT :
-# (rubrique, libelle), pas le code seul (réutilisé entre motifs, ex. 1300).
-MOTIFS_PAIE = {
-    "maladie": [
-        ("CP- Absences Maladie", 745),
-        ("Régul Maladie", 1300),
-        ("Régul maladie", 1300),
-        ("Annulation Maladie", 3200),
-        ("Absence Maladie", 3300),
-        ("Abs. Acc.Travail/Maladie Prof.", 3350),
-        ("Absence Maladie Covid", 3380),
-        ("Maintien maladie Covid-19", 3385),
-        ("Maintien maladie Covid-19", 3386),
-        ("Annul. Maladie", 3480),
-        ("Maladie non maintenue", 3480),
-        ("CP - Abs AT/Maladie Pro.", 3680),
-        ("CP-Abs AT/Maladie Pro. NUL", 3680),
-        ("SS Maladie Apprenti", 4115),
-        ("SS Maladie/Maternité/Inv/Décès", 4115),
-        ("SS Maladie Non Resident", 4120),
-        ("SS Maladie Mandataire Soc.", 4125),
-        ("Complement Cotisation Maladie", 4670),
-        ("Annul. Complement Maladie", 4675),
-        ("Deduction Complement Maladie", 4675),
-        ("Regul.Annul.Complement Maladie", 4676),
-        ("Complement Maladie Mand.Social", 4680),
-        ("BS:SS Maladie RG", 6255),
-        ("BS:SS Maladie-Matern .- Invalid.", 6255),
-        ("SS Maladie-Mat .- Invalid .- Deces", 6255),
-        ("BS:SS Maladie PIM/ADM sur CIF", 6256),
-        ("BS:SS Maladie-Matern .- Invalid.", 6260),
-        ("Dont CP acquis sur maladie", 9415),
-        ("Nombre d'arrets Maladie-AT", 9750),
-    ],
-    "accident de travail": [
-        ("Annulation Accident travail", 3250),
-        ("Accident du Travail", 4400),
-        ("Accident du Travail RG", 4400),
-        ("Accident du Travail", 4401),
-        ("Accident du Travail PIM", 4401),
-        ("Accident du Travail", 4420),
-        ("Accident du Travail Apprenti", 4420),
-        ("** Accident du Travail **", 6349),
-        ("BS: Accident du Travail", 6350),
-    ],
-    "maternité": [
-        ("Reg Maternité", 1300),
-        ("Reg Paternité", 1300),
-        ("Absence Maternite", 3390),
-        ("Maintien Maternite", 3395),
-        ("Absence Paternite (Maintenue)", 3405),
-        ("Maintien Paternite", 3406),
-        ("Paternite (non maintenue)", 3415),
-        ("SS Maladie/Maternité/Inv/Décès", 4115),
-    ],
-    "paternité": [
-        ("Reg Paternité", 1300),
-        ("Absence Paternite (Maintenue)", 3405),
-        ("Maintien Paternite", 3406),
-        ("Paternité (non maintenue)", 3415),
-    ],
-}
-
-# Sous-ensemble de MOTIFS_PAIE dont la colonne "Base" est un vrai nombre de jours
-# d'absence (vérifié empiriquement sur PAIE_AUDIT 2026 — cf. échanges de validation) :
-# la colonne "Base" est polymorphe, elle porte tantôt un nombre de jours, tantôt une
+# libellé peut légitimement porter plusieurs codes, et un même (rubrique, libellé) peut
+# apparaître sous deux motifs à la fois — un dict écraserait ces doublons silencieusement.
+# Clé d'identification côté PAIE_AUDIT : (rubrique, libelle), pas le code seul (réutilisé
+# entre motifs, ex. 1300 pour "Régul Maladie"/"Reg Maternité"/"Reg Paternité").
+#
+# La colonne "Base" est polymorphe : elle porte tantôt un nombre de jours, tantôt une
 # assiette de cotisation (montant en €), tantôt un taux d'acquisition de CP ou un nombre
 # d'épisodes, selon la rubrique. Seules les rubriques ci-dessous sont retenues pour le
 # calcul des jours d'absence ; les rubriques de cotisation (SS Maladie*, Complement*,
@@ -208,6 +151,25 @@ MOTIFS_PAIE = {
 # canonisé "accident de travail" côté DSN, cf. canoniser_motif_dsn) — la classer sous
 # "maladie" créait un miroir artificiel : mêmes jours comptés "maladie" côté PAIE et
 # "accident de travail" côté DSN pour la même absence, gonflant les deux écarts à la fois.
+#
+# RE-VALIDATION EXHAUSTIVE (2026-08-03) : sur suspicion que certaines rubriques ne
+# devraient pas compter comme des jours, les 37 rubriques d'un ancien catalogue de
+# référence (repéré au fil des sources PAIE, depuis supprimé — il n'était plus utilisé
+# que comme documentation et faisait doublon avec ce commentaire) ont été repassées une
+# par une (arithmétique Base×Taux=Montant, plausibilité physique
+# ≤31/mois, et pour 3350 un croisement systématique — pas anecdotique — avec le motif
+# DSN réel du même matricule/mois). Résultat : les 9 rubriques ci-dessous restent les
+# seules valides ; toutes les autres sont soit inexistantes dans les données 2026 (745,
+# 3386, 4120, 4675, 4676, 6260, 6350), soit des montants de cotisation en euros (1300
+# "Régul*"/"Reg*" toujours à 0 ; 4115/4125/4670/4680/6255/6256 : centaines à dizaines de
+# milliers d'euros ; 4400/4401/4420 "Accident du Travail RG/PIM/Apprenti" : médiane
+# 900 à 4000 — piste explicitement écartée après qu'une simulation ait donné 15 millions
+# de "jours" accident de travail pour l'année sur INLI, contre 1377 jours réels côté
+# DSN), soit des taux/compteurs (9415 : taux d'acquisition, valeurs à décimales < 24 ;
+# 9750 : nombre d'épisodes, valeurs 0/1/2), soit trop incohérentes pour être fiables
+# (3395 "Maintien Maternité" : seulement 82% des lignes respectent Base×Taux=Montant,
+# valeurs jusqu'à 122 ; 3406 "Maintien Paternité" : toujours à 0 ; 3385 : 1 seule ligne,
+# volume négligeable).
 MOTIFS_PAIE_JOURS = {
     "maladie": [
         ("Annulation Maladie", 3200),
@@ -229,3 +191,4 @@ MOTIFS_PAIE_JOURS = {
         ("Paternité (non maintenue)", 3415),
     ],
 }
+

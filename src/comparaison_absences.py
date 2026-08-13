@@ -476,6 +476,22 @@ def construire_synthese_ok(mapping, detail_mensuel):
     return synthese, tracabilite
 
 
+def construire_synthese_hors_tpt(mapping, detail_mensuel, mois_retenus):
+    """Vue complémentaire (cf. demande du 2026-08-03) : même synthèse que
+    construire_synthese_ok, mais restreinte aux mois où PAIE a réellement de la donnée
+    (par défaut janvier-juin) et EXCLUANT le motif "temps partiel thérapeutique" (aucune
+    rubrique PAIE ne le couvre, cf. config.py — l'inclure gonfle artificiellement l'écart
+    d'un motif structurellement incomparable). Ne remplace pas construire_synthese_ok :
+    les onglets sur tout le périmètre (avec TPT) sont conservés tels quels, celle-ci
+    n'ajoute qu'une vue complémentaire pour une lecture plus resserrée sur les vrais
+    écarts actionnables. Renvoie uniquement la synthèse (pas de traçabilité dédiée)."""
+    TPT = "temps partiel thérapeutique (pas de rubrique PAIE identifiée)"
+    sous = detail_mensuel.loc[(detail_mensuel["Motif"] != TPT) &
+                              (detail_mensuel["Mois absence (période)"].isin(mois_retenus))]
+    synthese, _ = construire_synthese_ok(mapping, sous)
+    return synthese
+
+
 # ===============================================================
 # 4. EXPORT EXCEL
 # ===============================================================
@@ -569,12 +585,14 @@ def _ecrire_onglet_tracabilite(writer, tracabilite, nom_onglet):
 
 
 def ecrire_comparatif_absences(mapping, detail_mensuel, detail_periode, anomalies, synthese_ok,
-                               tracabilite_ecarts, date_sortie, libelle_periode="T1"):
+                               tracabilite_ecarts, synthese_hors_tpt, date_sortie, libelle_periode="T1"):
     """Écrit UN CLASSEUR PAR SOCIÉTÉ (cf. demande du 2026-08-03) : chaque société de
     `mapping` reçoit son propre Comparatif_jours_absence_PAIE_DSN_<code>_<date_sortie>.xlsx,
-    avec les 5 mêmes onglets qu'auparavant mais filtrés sur cette société (toutes les
-    DataFrames en entrée portent une colonne "Entreprise" = code PAIE). Renvoie la liste
-    des chemins de fichiers écrits."""
+    avec les 6 onglets suivants filtrés sur cette société (toutes les DataFrames en
+    entrée portent une colonne "Entreprise" = code PAIE) — les 5 premiers onglets
+    couvrent tout le périmètre (motifs compris temps partiel thérapeutique) et sont
+    inchangés ; le 6e est une vue complémentaire qui les laisse intacts. Renvoie la
+    liste des chemins de fichiers écrits."""
     fichiers = []
     for code_paie in mapping.keys():
         out = os.path.join(RAPPORT_DIR, nom_fichier_comparatif_absences(code_paie, date_sortie))
@@ -583,12 +601,14 @@ def ecrire_comparatif_absences(mapping, detail_mensuel, detail_periode, anomalie
         sous_anomalies = anomalies.loc[anomalies["Entreprise"] == code_paie]
         sous_synthese = synthese_ok.loc[synthese_ok["Entreprise"] == code_paie]
         sous_tracabilite = tracabilite_ecarts.loc[tracabilite_ecarts["Entreprise"] == code_paie]
+        sous_hors_tpt = synthese_hors_tpt.loc[synthese_hors_tpt["Entreprise"] == code_paie]
         with pd.ExcelWriter(out, engine="openpyxl") as writer:
             _ecrire_onglet(writer, sous_detail, "1 - Détail mensuel")
             _ecrire_onglet(writer, sous_periode, f"2 - Total {libelle_periode}")
             _ecrire_onglet_anomalies(writer, sous_anomalies, "3 - Anomalies (jours)")
             _ecrire_onglet_synthese(writer, sous_synthese, "4 - Jours DSN vs PAIE")
             _ecrire_onglet_tracabilite(writer, sous_tracabilite, "5 - Traçabilité écarts")
+            _ecrire_onglet_synthese(writer, sous_hors_tpt, "6 - Hors TPT (jan-juin)")
         print(f"   ✅ écrit -> {out}")
         fichiers.append(out)
     return fichiers

@@ -29,7 +29,7 @@ Produit deux livrables distincts (+ un journal) :
     du 2026-08-03, cohérent avec les autres livrables PAIE déjà séparés par société) :
       output/rapports/Comparatif_jours_absence_PAIE_DSN_<code>_<date_sortie>.xlsx,
       un par société (`date_sortie` = date du jour de génération, format JJ-MM-AAAA),
-      chacun avec les mêmes 5 onglets, filtrés sur cette société :
+      chacun avec les 6 onglets suivants, filtrés sur cette société :
         "1 - Détail mensuel"       : une ligne par salarié / mois / motif ;
         "2 - Total Année 2026"     : une ligne par salarié / motif, sommée sur l'année 2026 ;
         "3 - Anomalies (jours)"    : lignes PAIE_AUDIT où "Base" est physiquement incohérente
@@ -46,6 +46,12 @@ Produit deux livrables distincts (+ un journal) :
         "5 - Traçabilité écarts"   : détail mensuel (grain motif) restreint aux salariés
           dont le total mensuel ne correspond pas, avec le total DSN/PAIE/écart du mois
           — pour permettre la vérification / correction / arbitrage salarié par salarié.
+        "6 - Hors TPT (jan-juin)"  : vue COMPLÉMENTAIRE (cf. demande du 2026-08-03) — même
+          construction que l'onglet "4", mais restreinte aux mois où PAIE a réellement de
+          la donnée (janvier-juin) et excluant le motif "temps partiel thérapeutique"
+          (aucune rubrique PAIE ne le couvre, cf. config.py) — pour une lecture resserrée
+          sur les écarts réellement actionnables, sans rien retirer des onglets 1 à 5 qui
+          couvrent toujours tout le périmètre.
       Colonnes (onglets 1/2/5) : Clé salarié (pivot), Nom, Prénom, Nom d'usage, NIR,
       Matricule, Entreprise, Etablissement, Siren, Nic, Siret, Motif, Nombre de jours
       absence PAIE/DSN, Mois absence (période), Écart constaté — avec filtre Excel
@@ -69,7 +75,8 @@ from src.logger_execution import configurer_logger, etape
 from src.comparaison_absences import (nom_fichier_dsn, nom_fichier_paie, charger_jours_dsn,
                                       charger_jours_paie, lire_identite_dsn_source, comparer_jours,
                                       comparer_jours_periode, detecter_anomalies_jours,
-                                      construire_synthese_ok, ecrire_comparatif_absences,
+                                      construire_synthese_ok, construire_synthese_hors_tpt,
+                                      ecrire_comparatif_absences,
                                       construire_absences_paie, ecrire_absences_paie)
 
 
@@ -152,6 +159,13 @@ def main():
         #    du 2026-07-31).
         etape(logger, 6, "Synthèse des jours DSN vs PAIE par société et par mois (à partir du détail mensuel).")
         synthese_ok, tracabilite_ecarts = construire_synthese_ok(mapping, detail)
+
+        # 6bis. Vue complémentaire hors temps partiel thérapeutique, restreinte à janvier-juin
+        # (là où PAIE a réellement de la donnée) — cf. demande du 2026-08-03. Les onglets sur
+        # tout le périmètre (avec TPT) ci-dessus restent inchangés, celle-ci s'ajoute en plus.
+        mois_jan_juin = [f"{config.ANNEE_PAIE}-{m:02d}" for m in range(1, 7)]
+        synthese_hors_tpt = construire_synthese_hors_tpt(mapping, detail, mois_jan_juin)
+
         for _, r in synthese_ok.iterrows():
             total_dsn, total_paie = r["Nombre de jours d'arrêt en DSN"], r["Nombre de jours d'arrêt en PAIE"]
             logger.info(f"[{r['Entreprise']} / {r['Société DSN']}] {r['Mois']} : "
@@ -207,7 +221,7 @@ def main():
         # 9. COMPARATIF "jours d'absence PAIE <-> DSN" — un classeur par société
         etape(logger, 9, "Écriture du COMPARATIF PAIE <-> DSN (un classeur par société).")
         fichiers_comparatif = ecrire_comparatif_absences(mapping, detail, detail_annee, anomalies, synthese_ok,
-                                                         tracabilite_ecarts, date_sortie,
+                                                         tracabilite_ecarts, synthese_hors_tpt, date_sortie,
                                                          libelle_periode=libelle_annee)
         for f in fichiers_comparatif:
             logger.info(f"Comparatif écrit : {f}")
